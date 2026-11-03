@@ -13,6 +13,19 @@ let manifest = { defaultLocale: "en-US", locales: [] };
 let currentLocale = "en-US";
 let dict = {};
 
+const widgetEl = document.getElementById("widget");
+const titlebarEl = document.getElementById("titlebar");
+const edgeDockView = document.getElementById("edgeDockView");
+const edgeRows = document.getElementById("edgeRows");
+const edgeStatusDot = document.getElementById("edgeStatusDot");
+const edgeRow1Label = document.getElementById("edgeRow1Label");
+const edgeRow2Label = document.getElementById("edgeRow2Label");
+const edgeFlashPct = document.getElementById("edgeFlashPct");
+const edgeFlashBar = document.getElementById("edgeFlashBar");
+const edgeArgonPct = document.getElementById("edgeArgonPct");
+const edgeArgonBar = document.getElementById("edgeArgonBar");
+
+let edgeWindowMode = "5h"; // Alternates calmly between "5h" and "weekly"
 const statusDot = document.getElementById("statusDot");
 const tierBadge = document.getElementById("tierBadge");
 const summaryList = document.getElementById("summaryList");
@@ -199,8 +212,113 @@ function resolveWindowTitle(bucket) {
   return bucket.displayName;
 }
 
+function findEdgeModelStat(snap, familyKey, idHint, windowMode) {
+  if (!snap || !snap.authenticated) return null;
+  const buckets = snap.buckets || [];
+
+  if (windowMode === "weekly") {
+    const weeklyBucket =
+      buckets.find((b) => b.id === "gemini-weekly") ||
+      buckets.find((b) => b.groupKey === "gemini" && b.window === "weekly") ||
+      buckets.find((b) => b.window === "weekly");
+    if (weeklyBucket) return weeklyBucket;
+  } else {
+    const fiveHourBucket =
+      buckets.find((b) => b.id === "gemini-5h") ||
+      buckets.find((b) => b.groupKey === "gemini" && b.window === "5h");
+    const models = snap.models || [];
+    const matches = models.filter(
+      (m) => m.familyKey === familyKey || (idHint && m.id.toLowerCase().includes(idHint))
+    );
+    if (matches.length > 0) {
+      const modelStat = matches.reduce((min, cur) =>
+        cur.remainingFraction < min.remainingFraction ? cur : min
+      );
+      // If model quota is within the 5h window (<= 5.5 hours) or no 5h bucket exists, prefer modelStat
+      if (!fiveHourBucket || (typeof modelStat.resetSeconds === "number" && modelStat.resetSeconds <= 19800)) {
+        return modelStat;
+      }
+    }
+    if (fiveHourBucket) return fiveHourBucket;
+  }
+
+  const models = snap.models || [];
+  const matches = models.filter(
+    (m) => m.familyKey === familyKey || (idHint && m.id.toLowerCase().includes(idHint))
+  );
+  if (matches.length > 0) {
+    return matches.reduce((min, cur) =>
+      cur.remainingFraction < min.remainingFraction ? cur : min
+    );
+  }
+  return buckets.find((b) => b.groupKey === "gemini") || null;
+}
+
+function applyEdgeRowStat(pctEl, barEl, stat) {
+  if (!stat) {
+    pctEl.textContent = "--%";
+    pctEl.style.color = "var(--text-muted)";
+    barEl.className = "edge-bar-fill fill-good";
+    barEl.style.width = "2%";
+    return;
+  }
+  const barWidth = showRemaining ? stat.remainingPercent : stat.usedPercent;
+  const fillClass = colorClassForRemaining(stat.remainingFraction);
+  const textColor = textColorForRemaining(stat.remainingFraction);
+  pctEl.textContent = formatPct(stat.remainingPercent, stat.usedPercent);
+  pctEl.style.color = textColor;
+  barEl.className = `edge-bar-fill ${fillClass}`;
+  barEl.style.width = `${Math.max(3, barWidth)}%`;
+}
+
+function updateEdgeDockPill(snap) {
+  const isWeekly = edgeWindowMode === "weekly";
+  if (edgeRow1Label) {
+    edgeRow1Label.textContent = isWeekly ? "Flash Wk" : "Flash 5h";
+  }
+  if (edgeRow2Label) {
+    edgeRow2Label.textContent = isWeekly ? "Argon Wk" : "Argon 5h";
+  }
+  const flashStat = findEdgeModelStat(snap, "gemini_3_8_flash", "flash", edgeWindowMode);
+  const argonStat = findEdgeModelStat(snap, "gemini_4_argon", "argon", edgeWindowMode);
+  applyEdgeRowStat(edgeFlashPct, edgeFlashBar, flashStat);
+  applyEdgeRowStat(edgeArgonPct, edgeArgonBar, argonStat);
+}
+
+window.__onDockStateChanged = function (collapsed, dockEdge, taskbarColor) {
+  if (dockEdge) {
+    widgetEl.setAttribute("data-dock", dockEdge);
+  }
+  if (taskbarColor) {
+    document.documentElement.style.setProperty("--taskbar-bg", taskbarColor);
+  }
+  if (collapsed) {
+    widgetEl.classList.add("dock-collapsed");
+    edgeDockView.classList.remove("hidden");
+    titlebarEl.classList.add("hidden");
+    fullView.classList.add("hidden");
+    compactView.classList.add("hidden");
+  } else {
+    widgetEl.classList.remove("dock-collapsed");
+    edgeDockView.classList.add("hidden");
+    titlebarEl.classList.remove("hidden");
+    compactView.classList.add("hidden");
+    fullView.classList.remove("hidden");
+  }
+};
+
+window.addEventListener("resize", () => {
+  const shouldBeCollapsed = window.innerWidth < 200;
+  const isCurrentlyCollapsed = widgetEl.classList.contains("dock-collapsed");
+  if (shouldBeCollapsed !== isCurrentlyCollapsed) {
+    window.__onDockStateChanged(shouldBeCollapsed);
+  }
+});
+
 function renderSnapshot(snap) {
   if (!snap) return;
+
+  updateEdgeDockPill(snap);
 
   if (snap.authenticated) {
     tierBadge.textContent = snap.paidTierName || snap.tierName || t("brandTitle");
@@ -248,47 +366,87 @@ function renderSnapshot(snap) {
     `;
   }
 
-  // 1. Summary view: Grouped by Quota Group
+  // 1. Hero Quota Groups: Side-by-side 5h & Weekly tiles per family group
   let summaryHtml = "";
-  let currentGroup = "";
-
   if (snap.buckets && snap.buckets.length > 0) {
+    const groupsMap = new Map();
     for (const b of snap.buckets) {
       const grpLabel = resolveGroupTitle(b);
-      if (grpLabel !== currentGroup) {
-        currentGroup = grpLabel;
-        summaryHtml += `<div class="section-label">${currentGroup}</div>`;
+      if (!groupsMap.has(grpLabel)) {
+        groupsMap.set(grpLabel, []);
       }
-      summaryHtml += renderCard(
-        resolveWindowTitle(b),
-        "",
-        b.remainingFraction,
-        b.remainingPercent,
-        b.usedPercent,
-        b.resetSeconds
-      );
+      groupsMap.get(grpLabel).push(b);
+    }
+
+    for (const [grpLabel, groupBuckets] of groupsMap.entries()) {
+      const tilesHtml = groupBuckets
+        .map((b) => {
+          const barWidth = showRemaining ? b.remainingPercent : b.usedPercent;
+          const fillClass = colorClassForRemaining(b.remainingFraction);
+          const textColor = textColorForRemaining(b.remainingFraction);
+          const resetIn = formatResetSeconds(b.resetSeconds);
+          const winShort = b.window === "5h" ? "5h" : b.window === "weekly" ? "7d" : b.displayName;
+          const winFull = resolveWindowTitle(b);
+          return `
+            <div class="window-tile" title="${winFull}">
+              <div class="window-tile-top">
+                <span class="window-tag ${b.window === "weekly" ? "tag-weekly" : "tag-5h"}">${winShort}</span>
+                <span class="reset-badge" title="${t("tooltips.resetTimer")}">⏱ ${resetIn}</span>
+              </div>
+              <div class="window-pct" style="color: ${textColor}">${formatPct(b.remainingPercent, b.usedPercent)}</div>
+              <div class="progress-track">
+                <div class="progress-fill ${fillClass}" style="width: ${Math.max(2, barWidth)}%"></div>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+
+      summaryHtml += `
+        <div class="group-hero-card">
+          <div class="group-hero-header">
+            <span class="group-hero-title">${grpLabel}</span>
+          </div>
+          <div class="window-tiles">
+            ${tilesHtml}
+          </div>
+        </div>
+      `;
     }
   }
 
   summaryList.innerHTML = summaryHtml || `<div class="skeleton">${t("status.noQuotas")}</div>`;
 
-  // 2. Detailed Models view
+  // 2. Unified Per-Model Quotas Grid (directly visible below Hero Groups)
+  const modelsArr = snap.models || [];
+  const modelsCountBadge = document.getElementById("modelsCountBadge");
+  if (modelsCountBadge) {
+    modelsCountBadge.textContent = modelsArr.length > 0 ? String(modelsArr.length) : "";
+  }
+
   let modelsHtml = "";
-  let currentFam = "";
-  for (const m of snap.models || []) {
+  for (const m of modelsArr) {
     const famLabel = t(`families.${m.familyKey}`);
-    if (famLabel !== currentFam) {
-      currentFam = famLabel;
-      modelsHtml += `<div class="section-label">${currentFam}</div>`;
-    }
-    modelsHtml += renderCard(
-      m.displayName,
-      "",
-      m.remainingFraction,
-      m.remainingPercent,
-      m.usedPercent,
-      m.resetSeconds
-    );
+    const barWidth = showRemaining ? m.remainingPercent : m.usedPercent;
+    const fillClass = colorClassForRemaining(m.remainingFraction);
+    const textColor = textColorForRemaining(m.remainingFraction);
+    const resetIn = formatResetSeconds(m.resetSeconds);
+
+    modelsHtml += `
+      <div class="model-tile">
+        <div class="model-tile-top">
+          <div class="model-name" title="${m.displayName}">${m.displayName}</div>
+          <span class="model-pct" style="color: ${textColor}">${formatPct(m.remainingPercent, m.usedPercent)}</span>
+        </div>
+        <div class="model-tile-sub">
+          <span class="model-fam">${famLabel}</span>
+          <span class="model-reset" title="${t("tooltips.resetTimer")}">⏱ ${resetIn}</span>
+        </div>
+        <div class="progress-track" style="height: 4px">
+          <div class="progress-fill ${fillClass}" style="width: ${Math.max(2, barWidth)}%"></div>
+        </div>
+      </div>
+    `;
   }
   modelsList.innerHTML = modelsHtml || `<div class="skeleton">${t("status.noModels")}</div>`;
 
@@ -333,6 +491,7 @@ function renderSnapshot(snap) {
 
 async function refreshUsage() {
   statusDot.className = "status-dot loading";
+  if (edgeStatusDot) edgeStatusDot.className = "status-dot loading";
   btnRefresh.classList.add("spinning");
   errorBanner.classList.add("hidden");
 
@@ -341,8 +500,10 @@ async function refreshUsage() {
     lastSnapshot = snap;
     renderSnapshot(snap);
     statusDot.className = "status-dot";
+    if (edgeStatusDot) edgeStatusDot.className = "status-dot";
   } catch (err) {
     statusDot.className = "status-dot error";
+    if (edgeStatusDot) edgeStatusDot.className = "status-dot error";
     errorBanner.textContent = formatError(err);
     errorBanner.classList.remove("hidden");
   } finally {
@@ -352,6 +513,7 @@ async function refreshUsage() {
 
 async function startGoogleLogin() {
   statusDot.className = "status-dot loading";
+  if (edgeStatusDot) edgeStatusDot.className = "status-dot loading";
   errorBanner.classList.add("hidden");
   btnGoogleLogin.disabled = true;
   isCheckingSession = true;
@@ -362,8 +524,10 @@ async function startGoogleLogin() {
     lastSnapshot = snap;
     renderSnapshot(snap);
     statusDot.className = "status-dot";
+    if (edgeStatusDot) edgeStatusDot.className = "status-dot";
   } catch (err) {
     statusDot.className = "status-dot error";
+    if (edgeStatusDot) edgeStatusDot.className = "status-dot error";
     errorBanner.textContent = formatError(err);
     errorBanner.classList.remove("hidden");
   } finally {
@@ -376,8 +540,14 @@ async function startGoogleLogin() {
 }
 
 // Event Listeners
-document.querySelector(".titlebar").addEventListener("mousedown", (e) => {
+titlebarEl.addEventListener("mousedown", (e) => {
   if (e.button === 0 && !e.target.closest(".controls")) {
+    invoke("start_window_drag");
+  }
+});
+
+edgeDockView.addEventListener("mousedown", (e) => {
+  if (e.button === 0) {
     invoke("start_window_drag");
   }
 });
@@ -399,53 +569,93 @@ langSelect.addEventListener("change", (e) => {
 btnToggleMode.addEventListener("click", () => {
   showRemaining = !showRemaining;
   modeLabel.textContent = showRemaining ? t("mode.remaining") : t("mode.used");
+  invoke("set_display_mode", { showRemaining }).catch(() => {});
   if (lastSnapshot) renderSnapshot(lastSnapshot);
 });
 
-btnPin.addEventListener("click", async () => {
-  isPinned = !isPinned;
-  await appWindow.setAlwaysOnTop(isPinned);
-  btnPin.classList.toggle("active", isPinned);
-});
-
-btnCompact.addEventListener("click", async () => {
-  isCompact = !isCompact;
-  btnCompact.classList.toggle("active", isCompact);
-  if (isCompact) {
-    fullView.classList.add("hidden");
-    compactView.classList.remove("hidden");
-    await appWindow.setSize(new LogicalSize(360, 76));
-  } else {
-    compactView.classList.add("hidden");
-    fullView.classList.remove("hidden");
-    await appWindow.setSize(new LogicalSize(340, 410));
-  }
-});
-
-btnClose.addEventListener("click", async () => {
-  await appWindow.hide();
-});
-
-opacitySlider.addEventListener("input", (e) => {
-  const pct = Number(e.target.value);
-  invoke("set_window_opacity", { percent: pct });
-});
-
-document.querySelectorAll(".tab").forEach((tabBtn) => {
-  tabBtn.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
-    tabBtn.classList.add("active");
-    const target = tabBtn.getAttribute("data-tab");
-    document.getElementById("tabSummary").classList.toggle("hidden", target !== "summary");
-    document.getElementById("tabModels").classList.toggle("hidden", target !== "models");
-    document.getElementById("tabInfo").classList.toggle("hidden", target !== "info");
+if (btnPin) {
+  btnPin.addEventListener("click", async () => {
+    isPinned = !isPinned;
+    await invoke("set_flyout_pinned", { pinned: isPinned });
+    btnPin.classList.toggle("active", isPinned);
   });
-});
+}
 
-// Initialize locales first, then load usage & start 5-minute (300s) auto-refresh
-initI18n().then(() => {
+if (btnCompact) {
+  btnCompact.addEventListener("click", async () => {
+    isPinned = false;
+    if (btnPin) btnPin.classList.remove("active");
+    await invoke("collapse_to_edge");
+  });
+}
+
+if (btnClose) {
+  btnClose.addEventListener("click", async () => {
+    isPinned = false;
+    if (btnPin) btnPin.classList.remove("active");
+    await invoke("collapse_to_edge");
+  });
+}
+
+if (opacitySlider) {
+  opacitySlider.addEventListener("input", (e) => {
+    const pct = Number(e.target.value);
+    invoke("set_window_opacity", { percent: pct });
+  });
+}
+
+const btnInfoToggle = document.getElementById("btnInfoToggle");
+const dashboardView = document.getElementById("dashboardView");
+const tabInfo = document.getElementById("tabInfo");
+if (btnInfoToggle && dashboardView && tabInfo) {
+  btnInfoToggle.addEventListener("click", () => {
+    const showInfo = tabInfo.classList.contains("hidden");
+    tabInfo.classList.toggle("hidden", !showInfo);
+    dashboardView.classList.toggle("hidden", showInfo);
+    btnInfoToggle.classList.toggle("active", showInfo);
+  });
+}
+
+window.refreshUsage = refreshUsage;
+
+async function syncInitialDockState() {
+  try {
+    const st = await invoke("get_dock_state");
+    if (st) {
+      isPinned = Boolean(st.isPinned);
+      if (btnPin) btnPin.classList.toggle("active", isPinned);
+      if (opacitySlider && typeof st.opacity === "number") {
+        opacitySlider.value = String(st.opacity);
+      }
+      window.__onDockStateChanged(
+        Boolean(st.isCollapsed),
+        st.dockEdge || "taskbar",
+        st.taskbarColor || null
+      );
+    }
+  } catch (_) {}
+}
+
+// Initialize dock state & locales first, then load usage & start 5-minute (300s) auto-refresh
+Promise.all([syncInitialDockState(), initI18n()]).then(() => {
   refreshUsage();
   setInterval(refreshUsage, 300000);
+
+  // Calmly alternate taskbar pill between 5-hour ("5h") and Weekly ("weekly") usage every 10 seconds
+  setInterval(() => {
+    if (!lastSnapshot || !lastSnapshot.authenticated) return;
+    if (edgeRows) {
+      edgeRows.classList.add("fading");
+      setTimeout(() => {
+        edgeWindowMode = edgeWindowMode === "5h" ? "weekly" : "5h";
+        updateEdgeDockPill(lastSnapshot);
+        edgeRows.classList.remove("fading");
+      }, 420);
+    } else {
+      edgeWindowMode = edgeWindowMode === "5h" ? "weekly" : "5h";
+      updateEdgeDockPill(lastSnapshot);
+    }
+  }, 10000);
 
   // Locally decrement reset countdown timers once per minute without hitting the network
   setInterval(() => {
