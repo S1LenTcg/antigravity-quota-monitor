@@ -8,21 +8,24 @@
 
 Google Antigravity enforces rolling usage quotas across its supported AI model families — specifically a 5-hour rolling window (`5h`) and a 7-day rolling window (`weekly`), split between Gemini models (Gemini 4 Argon, Gemini 3.8 Flash) and third-party models (Claude Opus 5.5, Claude Sonnet 5.5).
 
-Without a dedicated monitor, checking how much quota remains or when a depleted window resets requires interrupting your workflow to run `/usage` inside an active CLI session or navigating into IDE settings panels. If you have multiple terminal or editor sessions open simultaneously, it is easy to hit a rate limit unexpectedly in the middle of a task. This utility keeps a small, always-visible meter on the desktop (or in the Windows System Tray) that polls your current quota state every 60 seconds and shows either remaining or consumed percentages alongside the exact time until the next reset.
+Without a dedicated monitor, checking how much quota remains or when a depleted window resets requires interrupting your workflow to run `/usage` inside an active CLI session or navigating into IDE settings panels. If you have multiple terminal or editor sessions open simultaneously, it is easy to hit a rate limit unexpectedly in the middle of a task. This utility sits directly on your Windows 11 Taskbar as a native-blended pill (and in the Windows System Tray), calmly alternating between 5-hour (`5h`) and weekly (`Wk`) usage every 10 seconds, and expanding into a rich Unified Flyout Dashboard when hovered.
 
 ---
 
 ## How It Works
 
-1. **Local Installation & Session Discovery:** On startup, the application checks whether Antigravity CLI or Antigravity IDE is installed on the machine and looks for an existing signed-in session in three local locations:
+1. **Local Installation & Session Discovery:** On startup, the application checks whether Antigravity CLI or Antigravity IDE is installed on the machine and looks for an existing signed-in session across local storage locations:
    - The Windows Credential Manager entry `gemini:antigravity` (created by `agy`).
-   - The Antigravity IDE state database at `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` (or `.backup`).
+   - The Antigravity IDE state database at `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` (opened with Win32 `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` so it works seamlessly even while Antigravity IDE has the SQLite database locked).
    - The Antigravity ACP token file at `%USERPROFILE%\.gemini\antigravity-acp\acp_token.json`.
 2. **Dynamic Token Refresh (Zero Bundled Secrets):** The application does not embed any Google OAuth `client_id` or `client_secret` in its source code or compiled executable, nor does it run a custom OAuth login web server. When a stored `access_token` expires, the backend reads the OAuth client identifier and secret directly from the user's locally installed `agy.exe` or `language_server_windows_x64.exe` binary on disk, exchanges the local `refresh_token` with `https://oauth2.googleapis.com/token`, and caches the resulting short-lived access token in memory.
-3. **Quota & Model Retrieval:** Using the valid access token, the Rust backend queries the Antigravity quota endpoints (`loadCodeAssist`, `retrieveUserQuotaSummary`, and `fetchAvailableModels` on `https://daily-cloudcode-pa.googleapis.com`), counts active `.lock` files in `%USERPROFILE%\.gemini\antigravity-cli\presence`, and passes a structured snapshot to the Tauri WebView2 frontend.
-4. **Desktop Presentation:** The frontend renders the snapshot in two user-selectable layouts:
-   - **Full View (340×430 px):** Separate tabs for aggregated quota buckets (`Kvoodid`), individual model quotas (`Mudelid`), and connection metadata (`Info`), with a toggle between remaining percentage (`Alles %`) and used percentage (`Kasutatud %`), plus a background opacity slider.
-   - **Compact Pill View (360×76 px):** A minimal horizontal strip showing four summary progress bars (`Gem 5h`, `Gem Nd`, `Claude 5h`, `Claude Nd`) for keeping pinned in a screen corner.
+3. **Quota & Model Retrieval:** Using the valid access token, the Rust backend queries the Antigravity quota endpoints (`loadCodeAssist`, `retrieveUserQuotaSummary`, and `fetchAvailableModels` on `https://daily-cloudcode-pa.googleapis.com` every 5 minutes, with local 60-second countdown ticks), checks active OS file locks on `.lock` files in `%USERPROFILE%\.gemini\antigravity\presence` and `%USERPROFILE%\.gemini\antigravity-cli\presence` (plus running IDE/CLI processes), and passes a structured snapshot to the Tauri WebView2 frontend.
+4. **Windows 11 Taskbar Overlay + Unified Flyout Presentation:**
+   - **Taskbar Overlay Pill (114×38 px):** Sits directly inside the Windows 11 Taskbar (`Shell_TrayWnd`, left of `TrayNotifyWnd`), samples the live taskbar background color via Win32 `GetPixel` for a seamless borderless blend, and calmly crossfades every 10 seconds between **5-Hour (`Flash 5h` / `Argon 5h`)** and **Weekly (`Flash Wk` / `Argon Wk`)** remaining/used quotas. Can also be dragged anywhere along the taskbar or snapped to screen edges.
+   - **Unified Hover Flyout Dashboard (368×440 px):** Hovering over the taskbar pill opens a border-rounded flyout directly above the taskbar showing:
+     - **Side-by-Side 5h & Weekly Hero Cards:** Displays both 5-hour (`5h`) and 7-day (`7d`) windows side-by-side for Gemini and Claude model groups with tabular percentages, reset countdown timers (`⏱`), and glowing progress bars.
+     - **Unified Per-Model Breakdown Grid:** Displays individual model quotas (`Gemini 3.8 Flash`, `Gemini 4 Argon`, `Claude Opus 5.5`, `Claude Sonnet 5.5`, etc.) in a 2-column grid directly below the hero cards without requiring tab switching.
+     - **Quick Controls & Info Drawer:** Includes a `Left %` / `Used %` mode toggle, 12-language selector, collapsible connection/about info drawer (`ⓘ`), account switcher, active session counter, and window opacity slider.
 
 ---
 
