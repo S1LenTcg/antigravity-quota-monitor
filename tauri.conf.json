@@ -10,9 +10,10 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "label": "main",
-        "title": "Antigravity Quota Monitor",
-        "width": 114,
+        "label": "pill",
+        "title": "AGY Taskbar Widget",
+        "url": "pill.html",
+        "width": 124,
         "height": 38,
         "minWidth": 90,
         "minHeight": 34,
@@ -22,6 +23,22 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visible": true,
+        "shadow": false
+      },
+      {
+        "label": "main",
+        "title": "Antigravity Quota Monitor",
+        "url": "index.html",
+        "width": 368,
+        "height": 440,
+        "minWidth": 320,
+        "minHeight": 360,
+        "resizable": false,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
         "shadow": true
       }
     ],

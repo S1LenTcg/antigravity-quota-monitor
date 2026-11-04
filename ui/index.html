@@ -7,33 +7,9 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="widget" class="widget dock-collapsed" data-dock="taskbar">
-    <!-- Taskbar Pill View (blended directly into Windows 11 Taskbar) -->
-    <div id="edgeDockView" class="edge-dock-view">
-      <div class="edge-rows" id="edgeRows">
-        <div class="edge-item">
-          <div class="edge-row">
-            <span class="edge-model" id="edgeRow1Label">Flash 5h</span>
-            <span class="edge-pct" id="edgeFlashPct">--%</span>
-          </div>
-          <div class="edge-bar-track">
-            <div class="edge-bar-fill fill-good" id="edgeFlashBar" style="width: 2%"></div>
-          </div>
-        </div>
-        <div class="edge-item">
-          <div class="edge-row">
-            <span class="edge-model" id="edgeRow2Label">Argon 5h</span>
-            <span class="edge-pct" id="edgeArgonPct">--%</span>
-          </div>
-          <div class="edge-bar-track">
-            <div class="edge-bar-fill fill-good" id="edgeArgonBar" style="width: 2%"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Flyout Header (Taskbar Flyout style — no window pin/close chrome) -->
-    <header id="titlebar" class="titlebar hidden">
+  <div id="widget" class="widget">
+    <!-- Flyout Header (System Tray Hover Flyout — no window pin/close chrome) -->
+    <header id="titlebar" class="titlebar">
       <div class="brand">
         <span class="status-dot" id="statusDot"></span>
         <div class="brand-text">
@@ -63,16 +39,17 @@
             <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
           </svg>
         </button>
+        <button id="btnQuit" class="icon-btn close-btn" data-i18n-title="tray.quit">
+          <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.2" fill="none">
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+            <line x1="12" y1="2" x2="12" y2="12"></line>
+          </svg>
+        </button>
       </div>
     </header>
 
-    <!-- Compact Mini-Pill View (shown when in compact mode) -->
-    <div id="compactView" class="compact-view hidden">
-      <div id="compactPills" class="compact-pills"></div>
-    </div>
-
-    <!-- Full Expanded Flyout View -->
-    <main id="fullView" class="full-view hidden">
+    <!-- Full Flyout View -->
+    <main id="fullView" class="full-view">
       <div id="errorBanner" class="error-banner hidden"></div>
 
       <!-- Unauthenticated / Prerequisite Card -->

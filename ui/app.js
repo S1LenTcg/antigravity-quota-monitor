@@ -15,23 +15,10 @@ let dict = {};
 
 const widgetEl = document.getElementById("widget");
 const titlebarEl = document.getElementById("titlebar");
-const edgeDockView = document.getElementById("edgeDockView");
-const edgeRows = document.getElementById("edgeRows");
-const edgeStatusDot = document.getElementById("edgeStatusDot");
-const edgeRow1Label = document.getElementById("edgeRow1Label");
-const edgeRow2Label = document.getElementById("edgeRow2Label");
-const edgeFlashPct = document.getElementById("edgeFlashPct");
-const edgeFlashBar = document.getElementById("edgeFlashBar");
-const edgeArgonPct = document.getElementById("edgeArgonPct");
-const edgeArgonBar = document.getElementById("edgeArgonBar");
-
-let edgeWindowMode = "5h"; // Alternates calmly between "5h" and "weekly"
 const statusDot = document.getElementById("statusDot");
 const tierBadge = document.getElementById("tierBadge");
 const summaryList = document.getElementById("summaryList");
 const modelsList = document.getElementById("modelsList");
-const compactView = document.getElementById("compactView");
-const compactPills = document.getElementById("compactPills");
 const fullView = document.getElementById("fullView");
 const loginView = document.getElementById("loginView");
 const loginTitle = document.getElementById("loginTitle");
@@ -46,9 +33,6 @@ const sessionsCount = document.getElementById("sessionsCount");
 const updatedAt = document.getElementById("updatedAt");
 const modeLabel = document.getElementById("modeLabel");
 const btnRefresh = document.getElementById("btnRefresh");
-const btnPin = document.getElementById("btnPin");
-const btnCompact = document.getElementById("btnCompact");
-const btnClose = document.getElementById("btnClose");
 const btnToggleMode = document.getElementById("btnToggleMode");
 const opacitySlider = document.getElementById("opacitySlider");
 const langSelect = document.getElementById("langSelect");
@@ -113,14 +97,6 @@ async function loadLocale(code) {
   });
 
   modeLabel.textContent = showRemaining ? t("mode.remaining") : t("mode.used");
-
-  try {
-    await invoke("set_tray_labels", {
-      toggle: t("tray.toggle"),
-      top: t("tray.top"),
-      quit: t("tray.quit"),
-    });
-  } catch (_) {}
 
   if (lastSnapshot) {
     renderSnapshot(lastSnapshot);
@@ -212,113 +188,17 @@ function resolveWindowTitle(bucket) {
   return bucket.displayName;
 }
 
-function findEdgeModelStat(snap, familyKey, idHint, windowMode) {
-  if (!snap || !snap.authenticated) return null;
-  const buckets = snap.buckets || [];
-
-  if (windowMode === "weekly") {
-    const weeklyBucket =
-      buckets.find((b) => b.id === "gemini-weekly") ||
-      buckets.find((b) => b.groupKey === "gemini" && b.window === "weekly") ||
-      buckets.find((b) => b.window === "weekly");
-    if (weeklyBucket) return weeklyBucket;
-  } else {
-    const fiveHourBucket =
-      buckets.find((b) => b.id === "gemini-5h") ||
-      buckets.find((b) => b.groupKey === "gemini" && b.window === "5h");
-    const models = snap.models || [];
-    const matches = models.filter(
-      (m) => m.familyKey === familyKey || (idHint && m.id.toLowerCase().includes(idHint))
-    );
-    if (matches.length > 0) {
-      const modelStat = matches.reduce((min, cur) =>
-        cur.remainingFraction < min.remainingFraction ? cur : min
-      );
-      // If model quota is within the 5h window (<= 5.5 hours) or no 5h bucket exists, prefer modelStat
-      if (!fiveHourBucket || (typeof modelStat.resetSeconds === "number" && modelStat.resetSeconds <= 19800)) {
-        return modelStat;
-      }
-    }
-    if (fiveHourBucket) return fiveHourBucket;
-  }
-
-  const models = snap.models || [];
-  const matches = models.filter(
-    (m) => m.familyKey === familyKey || (idHint && m.id.toLowerCase().includes(idHint))
-  );
-  if (matches.length > 0) {
-    return matches.reduce((min, cur) =>
-      cur.remainingFraction < min.remainingFraction ? cur : min
-    );
-  }
-  return buckets.find((b) => b.groupKey === "gemini") || null;
-}
-
-function applyEdgeRowStat(pctEl, barEl, stat) {
-  if (!stat) {
-    pctEl.textContent = "--%";
-    pctEl.style.color = "var(--text-muted)";
-    barEl.className = "edge-bar-fill fill-good";
-    barEl.style.width = "2%";
-    return;
-  }
-  const barWidth = showRemaining ? stat.remainingPercent : stat.usedPercent;
-  const fillClass = colorClassForRemaining(stat.remainingFraction);
-  const textColor = textColorForRemaining(stat.remainingFraction);
-  pctEl.textContent = formatPct(stat.remainingPercent, stat.usedPercent);
-  pctEl.style.color = textColor;
-  barEl.className = `edge-bar-fill ${fillClass}`;
-  barEl.style.width = `${Math.max(3, barWidth)}%`;
-}
-
-function updateEdgeDockPill(snap) {
-  const isWeekly = edgeWindowMode === "weekly";
-  if (edgeRow1Label) {
-    edgeRow1Label.textContent = isWeekly ? "Flash Wk" : "Flash 5h";
-  }
-  if (edgeRow2Label) {
-    edgeRow2Label.textContent = isWeekly ? "Argon Wk" : "Argon 5h";
-  }
-  const flashStat = findEdgeModelStat(snap, "gemini_3_8_flash", "flash", edgeWindowMode);
-  const argonStat = findEdgeModelStat(snap, "gemini_4_argon", "argon", edgeWindowMode);
-  applyEdgeRowStat(edgeFlashPct, edgeFlashBar, flashStat);
-  applyEdgeRowStat(edgeArgonPct, edgeArgonBar, argonStat);
-}
-
-window.__onDockStateChanged = function (collapsed, dockEdge, taskbarColor) {
-  if (dockEdge) {
-    widgetEl.setAttribute("data-dock", dockEdge);
-  }
+window.__onDockStateChanged = function (_collapsed, _dockEdge, taskbarColor) {
   if (taskbarColor) {
     document.documentElement.style.setProperty("--taskbar-bg", taskbarColor);
   }
-  if (collapsed) {
-    widgetEl.classList.add("dock-collapsed");
-    edgeDockView.classList.remove("hidden");
-    titlebarEl.classList.add("hidden");
-    fullView.classList.add("hidden");
-    compactView.classList.add("hidden");
-  } else {
-    widgetEl.classList.remove("dock-collapsed");
-    edgeDockView.classList.add("hidden");
-    titlebarEl.classList.remove("hidden");
-    compactView.classList.add("hidden");
-    fullView.classList.remove("hidden");
-  }
+  widgetEl.classList.remove("dock-collapsed");
+  titlebarEl.classList.remove("hidden");
+  fullView.classList.remove("hidden");
 };
-
-window.addEventListener("resize", () => {
-  const shouldBeCollapsed = window.innerWidth < 200;
-  const isCurrentlyCollapsed = widgetEl.classList.contains("dock-collapsed");
-  if (shouldBeCollapsed !== isCurrentlyCollapsed) {
-    window.__onDockStateChanged(shouldBeCollapsed);
-  }
-});
 
 function renderSnapshot(snap) {
   if (!snap) return;
-
-  updateEdgeDockPill(snap);
 
   if (snap.authenticated) {
     tierBadge.textContent = snap.paidTierName || snap.tierName || t("brandTitle");
@@ -449,49 +329,10 @@ function renderSnapshot(snap) {
     `;
   }
   modelsList.innerHTML = modelsHtml || `<div class="skeleton">${t("status.noModels")}</div>`;
-
-  // 3. Compact Mini-Pills view
-  const miniMap = [
-    { id: "gemini-5h", labelKey: "mini.gemini_5h" },
-    { id: "gemini-weekly", labelKey: "mini.gemini_weekly" },
-    { id: "3p-5h", labelKey: "mini.claude_5h" },
-    { id: "3p-weekly", labelKey: "mini.claude_weekly" },
-  ];
-
-  const miniItems = [];
-  for (const m of miniMap) {
-    const found = (snap.buckets || []).find((b) => b.id === m.id);
-    if (found) {
-      miniItems.push({ shortLabel: t(m.labelKey), ...found });
-    }
-  }
-
-  compactPills.innerHTML = miniItems
-    .map((item) => {
-      const barWidth = showRemaining ? item.remainingPercent : item.usedPercent;
-      const fillClass = colorClassForRemaining(item.remainingFraction);
-      const textColor = textColorForRemaining(item.remainingFraction);
-      const grpLabel = resolveGroupTitle(item);
-      const winLabel = resolveWindowTitle(item);
-      const resetIn = formatResetSeconds(item.resetSeconds);
-      return `
-        <div class="mini-pill" title="${grpLabel} - ${winLabel} (${resetIn})">
-          <div class="mini-top">
-            <span class="mini-name">${item.shortLabel}</span>
-            <span style="color:${textColor}">${formatPct(item.remainingPercent, item.usedPercent)}</span>
-          </div>
-          <div class="progress-track" style="height:4px">
-            <div class="progress-fill ${fillClass}" style="width:${Math.max(2, barWidth)}%"></div>
-          </div>
-        </div>
-      `;
-    })
-    .join("");
 }
 
 async function refreshUsage() {
   statusDot.className = "status-dot loading";
-  if (edgeStatusDot) edgeStatusDot.className = "status-dot loading";
   btnRefresh.classList.add("spinning");
   errorBanner.classList.add("hidden");
 
@@ -500,10 +341,8 @@ async function refreshUsage() {
     lastSnapshot = snap;
     renderSnapshot(snap);
     statusDot.className = "status-dot";
-    if (edgeStatusDot) edgeStatusDot.className = "status-dot";
   } catch (err) {
     statusDot.className = "status-dot error";
-    if (edgeStatusDot) edgeStatusDot.className = "status-dot error";
     errorBanner.textContent = formatError(err);
     errorBanner.classList.remove("hidden");
   } finally {
@@ -513,7 +352,6 @@ async function refreshUsage() {
 
 async function startGoogleLogin() {
   statusDot.className = "status-dot loading";
-  if (edgeStatusDot) edgeStatusDot.className = "status-dot loading";
   errorBanner.classList.add("hidden");
   btnGoogleLogin.disabled = true;
   isCheckingSession = true;
@@ -524,10 +362,8 @@ async function startGoogleLogin() {
     lastSnapshot = snap;
     renderSnapshot(snap);
     statusDot.className = "status-dot";
-    if (edgeStatusDot) edgeStatusDot.className = "status-dot";
   } catch (err) {
     statusDot.className = "status-dot error";
-    if (edgeStatusDot) edgeStatusDot.className = "status-dot error";
     errorBanner.textContent = formatError(err);
     errorBanner.classList.remove("hidden");
   } finally {
@@ -546,18 +382,6 @@ titlebarEl.addEventListener("mousedown", (e) => {
   }
 });
 
-edgeDockView.addEventListener("mousedown", (e) => {
-  if (e.button === 0) {
-    invoke("start_window_drag");
-  }
-});
-
-compactView.addEventListener("mousedown", (e) => {
-  if (e.button === 0) {
-    invoke("start_window_drag");
-  }
-});
-
 btnRefresh.addEventListener("click", () => refreshUsage());
 btnGoogleLogin.addEventListener("click", () => startGoogleLogin());
 btnSwitchAccount.addEventListener("click", () => startGoogleLogin());
@@ -572,30 +396,6 @@ btnToggleMode.addEventListener("click", () => {
   invoke("set_display_mode", { showRemaining }).catch(() => {});
   if (lastSnapshot) renderSnapshot(lastSnapshot);
 });
-
-if (btnPin) {
-  btnPin.addEventListener("click", async () => {
-    isPinned = !isPinned;
-    await invoke("set_flyout_pinned", { pinned: isPinned });
-    btnPin.classList.toggle("active", isPinned);
-  });
-}
-
-if (btnCompact) {
-  btnCompact.addEventListener("click", async () => {
-    isPinned = false;
-    if (btnPin) btnPin.classList.remove("active");
-    await invoke("collapse_to_edge");
-  });
-}
-
-if (btnClose) {
-  btnClose.addEventListener("click", async () => {
-    isPinned = false;
-    if (btnPin) btnPin.classList.remove("active");
-    await invoke("collapse_to_edge");
-  });
-}
 
 if (opacitySlider) {
   opacitySlider.addEventListener("input", (e) => {
@@ -616,22 +416,25 @@ if (btnInfoToggle && dashboardView && tabInfo) {
   });
 }
 
+const btnQuit = document.getElementById("btnQuit");
+if (btnQuit) {
+  btnQuit.addEventListener("click", () => {
+    invoke("quit_app").catch(() => {});
+  });
+}
+
 window.refreshUsage = refreshUsage;
 
 async function syncInitialDockState() {
   try {
     const st = await invoke("get_dock_state");
     if (st) {
-      isPinned = Boolean(st.isPinned);
-      if (btnPin) btnPin.classList.toggle("active", isPinned);
       if (opacitySlider && typeof st.opacity === "number") {
         opacitySlider.value = String(st.opacity);
       }
-      window.__onDockStateChanged(
-        Boolean(st.isCollapsed),
-        st.dockEdge || "taskbar",
-        st.taskbarColor || null
-      );
+      if (st.taskbarColor) {
+        document.documentElement.style.setProperty("--taskbar-bg", st.taskbarColor);
+      }
     }
   } catch (_) {}
 }
@@ -640,22 +443,6 @@ async function syncInitialDockState() {
 Promise.all([syncInitialDockState(), initI18n()]).then(() => {
   refreshUsage();
   setInterval(refreshUsage, 300000);
-
-  // Calmly alternate taskbar pill between 5-hour ("5h") and Weekly ("weekly") usage every 10 seconds
-  setInterval(() => {
-    if (!lastSnapshot || !lastSnapshot.authenticated) return;
-    if (edgeRows) {
-      edgeRows.classList.add("fading");
-      setTimeout(() => {
-        edgeWindowMode = edgeWindowMode === "5h" ? "weekly" : "5h";
-        updateEdgeDockPill(lastSnapshot);
-        edgeRows.classList.remove("fading");
-      }, 420);
-    } else {
-      edgeWindowMode = edgeWindowMode === "5h" ? "weekly" : "5h";
-      updateEdgeDockPill(lastSnapshot);
-    }
-  }, 10000);
 
   // Locally decrement reset countdown timers once per minute without hitting the network
   setInterval(() => {
