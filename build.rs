@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-changed=src/main.rs");
     println!("cargo:rerun-if-changed=ui");
     println!("cargo:rerun-if-changed=ui/index.html");
     println!("cargo:rerun-if-changed=ui/pill.html");

@@ -416,6 +416,18 @@ if (btnInfoToggle && dashboardView && tabInfo) {
   });
 }
 
+const btnAutostart = document.getElementById("btnAutostart");
+let isAutostart = false;
+if (btnAutostart) {
+  btnAutostart.addEventListener("click", async () => {
+    try {
+      const next = await invoke("set_autostart", { enabled: !isAutostart });
+      isAutostart = Boolean(next);
+      btnAutostart.classList.toggle("active", isAutostart);
+    } catch (_) {}
+  });
+}
+
 const btnQuit = document.getElementById("btnQuit");
 if (btnQuit) {
   btnQuit.addEventListener("click", () => {
@@ -431,6 +443,10 @@ async function syncInitialDockState() {
     if (st) {
       if (opacitySlider && typeof st.opacity === "number") {
         opacitySlider.value = String(st.opacity);
+      }
+      if (typeof st.autostart === "boolean") {
+        isAutostart = st.autostart;
+        if (btnAutostart) btnAutostart.classList.toggle("active", isAutostart);
       }
       if (st.taskbarColor) {
         document.documentElement.style.setProperty("--taskbar-bg", st.taskbarColor);

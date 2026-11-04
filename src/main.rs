@@ -407,8 +407,194 @@ struct DockStateView {
     is_collapsed: bool,
     dock_edge: String,
     is_pinned: bool,
+    autostart: bool,
     opacity: u8,
     taskbar_color: Option<String>,
+}
+
+const AUTOSTART_REG_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const AUTOSTART_REG_NAME: &str = "AntigravityQuotaMonitor";
+const HKEY_CURRENT_USER: isize = -2147483647isize; // 0x80000001u32 as i32 as isize
+const KEY_READ: u32 = 0x20019;
+const KEY_SET_VALUE: u32 = 0x0002;
+const REG_SZ: u32 = 1;
+
+#[link(name = "advapi32")]
+extern "system" {
+    fn RegOpenKeyExW(
+        hkey: isize,
+        lp_sub_key: *const u16,
+        ul_options: u32,
+        sam_desired: u32,
+        phk_result: *mut isize,
+    ) -> i32;
+    fn RegQueryValueExW(
+        hkey: isize,
+        lp_value_name: *const u16,
+        lp_reserved: *const u32,
+        lp_type: *mut u32,
+        lp_data: *mut u8,
+        lpcb_data: *mut u32,
+    ) -> i32;
+    fn RegSetValueExW(
+        hkey: isize,
+        lp_value_name: *const u16,
+        reserved: u32,
+        dw_type: u32,
+        lp_data: *const u8,
+        cb_data: u32,
+    ) -> i32;
+    fn RegDeleteValueW(hkey: isize, lp_value_name: *const u16) -> i32;
+    fn RegCloseKey(hkey: isize) -> i32;
+}
+
+fn clean_windows_path(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        p
+    }
+}
+
+fn installed_exe_path() -> Option<PathBuf> {
+    std::env::var("LOCALAPPDATA").ok().map(|p| {
+        PathBuf::from(p)
+            .join("Programs")
+            .join("AntigravityQuotaMonitor")
+            .join("antigravity-quota-monitor.exe")
+    })
+}
+
+fn start_menu_shortcut_path() -> Option<PathBuf> {
+    std::env::var("APPDATA").ok().map(|p| {
+        PathBuf::from(p)
+            .join("Microsoft")
+            .join("Windows")
+            .join("Start Menu")
+            .join("Programs")
+            .join("Antigravity Quota Monitor.lnk")
+    })
+}
+
+fn is_autostart_enabled_sync() -> bool {
+    let subkey = to_wide(AUTOSTART_REG_SUBKEY);
+    let val_name = to_wide(AUTOSTART_REG_NAME);
+    unsafe {
+        let mut hkey: isize = 0;
+        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut hkey) != 0 {
+            return false;
+        }
+        let mut data_len: u32 = 0;
+        let status = RegQueryValueExW(
+            hkey,
+            val_name.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut data_len,
+        );
+        let _ = RegCloseKey(hkey);
+        status == 0 && data_len > 2
+    }
+}
+
+fn ensure_installed_binary_sync() -> Option<PathBuf> {
+    let cur = clean_windows_path(std::env::current_exe().ok()?);
+    let target = installed_exe_path()?;
+    if cur != target {
+        if let Some(parent) = target.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if fs::copy(&cur, &target).is_ok() {
+            return Some(target);
+        }
+    }
+    if target.is_file() {
+        return Some(target);
+    }
+    Some(cur)
+}
+
+fn create_start_menu_shortcut_sync(target_exe: &PathBuf) {
+    let Some(lnk_path) = start_menu_shortcut_path() else {
+        return;
+    };
+    let clean_target = clean_windows_path(target_exe.clone());
+    let ps_cmd = format!(
+        "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('{}'); $s.TargetPath = '{}'; $s.WorkingDirectory = '{}'; $s.Description = 'Antigravity Quota Monitor'; $s.Save()",
+        lnk_path.to_string_lossy().replace('\'', "''"),
+        clean_target.to_string_lossy().replace('\'', "''"),
+        clean_target
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default()
+            .replace('\'', "''")
+    );
+    let _ = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+}
+
+fn remove_start_menu_shortcut_sync() {
+    if let Some(lnk_path) = start_menu_shortcut_path() {
+        let _ = fs::remove_file(lnk_path);
+    }
+}
+
+fn set_autostart_sync(enabled: bool) -> Result<bool, String> {
+    let subkey = to_wide(AUTOSTART_REG_SUBKEY);
+    let val_name = to_wide(AUTOSTART_REG_NAME);
+    if enabled {
+        let exe_path = ensure_installed_binary_sync()
+            .or_else(|| std::env::current_exe().ok().map(clean_windows_path))
+            .ok_or_else(|| "EXE_PATH_NOT_FOUND".to_string())?;
+        create_start_menu_shortcut_sync(&exe_path);
+        let cmd_str = format!("\"{}\"", exe_path.to_string_lossy());
+        let wide_val = to_wide(&cmd_str);
+        unsafe {
+            let mut hkey: isize = 0;
+            if RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                subkey.as_ptr(),
+                0,
+                KEY_SET_VALUE,
+                &mut hkey,
+            ) != 0
+            {
+                return Err("REG_OPEN_FAILED".to_string());
+            }
+            let status = RegSetValueExW(
+                hkey,
+                val_name.as_ptr(),
+                0,
+                REG_SZ,
+                wide_val.as_ptr() as *const u8,
+                (wide_val.len() * 2) as u32,
+            );
+            let _ = RegCloseKey(hkey);
+            if status != 0 {
+                return Err(format!("REG_SET_FAILED_{}", status));
+            }
+        }
+    } else {
+        unsafe {
+            let mut hkey: isize = 0;
+            if RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                subkey.as_ptr(),
+                0,
+                KEY_SET_VALUE,
+                &mut hkey,
+            ) == 0
+            {
+                let _ = RegDeleteValueW(hkey, val_name.as_ptr());
+                let _ = RegCloseKey(hkey);
+            }
+        }
+    }
+    Ok(is_autostart_enabled_sync())
 }
 
 struct DockRuntime {
@@ -1595,9 +1781,15 @@ async fn get_dock_state(state: State<'_, Arc<AppState>>) -> Result<DockStateView
         is_collapsed: false,
         dock_edge: dock.dock_edge.clone(),
         is_pinned: dock.is_pinned,
+        autostart: is_autostart_enabled_sync(),
         opacity,
         taskbar_color: dock.taskbar_color.clone(),
     })
+}
+
+#[tauri::command]
+async fn set_autostart(enabled: bool) -> Result<bool, String> {
+    set_autostart_sync(enabled)
 }
 
 #[tauri::command]
@@ -1817,6 +2009,20 @@ fn show_flyout_above_x(w: &tauri::WebviewWindow, pill_left_x: i32, pill_top_y: i
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--install") {
+        let _ = set_autostart_sync(true);
+        if let Some(installed) = installed_exe_path().filter(|p| p.is_file()) {
+            let _ = Command::new(installed).spawn();
+        }
+        std::process::exit(0);
+    }
+    if args.iter().any(|a| a == "--uninstall") {
+        let _ = set_autostart_sync(false);
+        remove_start_menu_shortcut_sync();
+        std::process::exit(0);
+    }
+
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(12))
         .build()
@@ -1862,6 +2068,7 @@ fn main() {
             get_usage,
             launch_antigravity,
             quit_app,
+            set_autostart,
             set_display_mode,
             set_window_opacity,
             start_window_drag,
