@@ -1,44 +1,49 @@
 # Antigravity Quota Monitor (`antigravity-quota-monitor`)
 
-`antigravity-quota-monitor` is a lightweight, 100% native Windows 11 desktop utility built in pure Rust and Win32 GDI/DWM (~1.7 MB RAM working set, ~2.5 MB binary, zero WebView2/Chromium processes) that places a live quota indicator directly on the Windows Taskbar and displays current usage quotas, per-model limits, and reset timers for Google Antigravity CLI (`agy`) and Antigravity IDE.
-
----
+`antigravity-quota-monitor` is a native Windows 11 taskbar utility written in Rust and Win32 GDI/DWM (~1.7 MB RAM working set, ~2.5 MB executable, no WebView2 or Chromium processes). It sits on the Windows Taskbar and shows remaining usage quotas, per-model limits, and reset timers for Google Antigravity CLI (`agy`) and Antigravity IDE.
 
 ## Why This Exists
 
-Google Antigravity enforces rolling usage quotas across its supported AI model families — specifically a 5-hour rolling window (`5h`) and a 7-day rolling window (`weekly`), split between Gemini models (Gemini 4 Argon, Gemini 3.8 Flash) and third-party models (Claude Opus 5.5, Claude Sonnet 5.5).
+Google Antigravity uses rolling usage quotas across its model families: a 5-hour window (`5h`) and a 7-day window (`weekly`), split between Gemini models (Gemini 4 Argon, Gemini 3.8 Flash) and third-party models (Claude Opus 5.5, Claude Sonnet 5.5).
 
-Without a dedicated monitor, checking how much quota remains or when a depleted window resets requires interrupting your work to run `/usage` inside an active CLI session or opening IDE settings panels. When multiple terminal or editor sessions are running at the same time, it is easy to hit a rate limit unexpectedly in the middle of a task. This utility places a small two-line status indicator directly over the left side of the Windows 11 Taskbar that alternates between 5-hour (`5h`) and weekly (`Wk`) quota figures every 10 seconds, and opens a detailed Flyout panel above the taskbar when hovered.
+Without a dedicated monitor, checking how much quota is left or when a window resets means stopping your work to run `/usage` inside an active CLI session or opening IDE settings. When multiple terminal or editor sessions are open at once, it is easy to hit a rate limit mid-task. This tool places a small two-line indicator on the left side of the Windows 11 Taskbar that switches between 5-hour (`5h`) and weekly (`Wk`) numbers every 10 seconds, and opens a full Flyout panel above the taskbar when you hover over it.
 
----
+## Read Before Installing
+
+Because this program attaches directly to the Windows 11 Taskbar instead of opening a normal desktop window, check these points first to see if it fits your setup:
+
+1. **It covers the Windows 11 Weather / Temperature ("Widgets") area by default.**
+   The `124x38 px` quota pill is placed at the far-left edge of the taskbar (`x = 8 px` scaled for DPI), right on top of the default Windows 11 Weather / Temperature button. If you want to keep the Weather button visible too, hold down the left mouse button on the quota pill and drag it to the right along the taskbar. The new position is saved automatically.
+2. **There is no system tray icon and no Alt+Tab window.**
+   To avoid adding another icon next to the clock, the program runs only as the taskbar pill and its hover Flyout. To close the program, move your mouse over the pill to open the Flyout and click the power button (`⏻`) in the top-right corner.
+3. **The Setup installer enables Windows login auto-start.**
+   Running `antigravity-quota-monitor-windows-x64-setup.exe` (or running the binary with `--install`) copies the executable to `%LOCALAPPDATA%\Programs\AntigravityQuotaMonitor\antigravity-quota-monitor.exe` and adds `AntigravityQuotaMonitor` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. If you do not want it starting with Windows, click the bolt icon (`⚡`) in the Flyout header to turn auto-start off, or use the portable `.exe` instead.
+4. **It reads your existing local Antigravity session.**
+   The program never asks for your Google password and contains no hardcoded Google OAuth keys. It reads the existing token saved on your PC by Antigravity CLI (`gemini:antigravity` in Windows Credential Manager) or Antigravity IDE (`%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb`), and reads the OAuth client ID from your locally installed `agy.exe` or `language_server_windows_x64.exe` binary when an access token expires.
+5. **When not to use this tool:**
+   - You do not have Google Antigravity CLI or Antigravity IDE installed and signed in on Windows.
+   - You use an auto-hiding taskbar, a top/vertical taskbar, or left-aligned taskbar icons with no free horizontal space on the bar.
+   - You want a normal, resizable desktop window rather than a fixed taskbar widget.
 
 ## How It Works
 
-1. **Local Installation & Session Discovery:** On startup, the application checks whether Antigravity CLI or Antigravity IDE is installed on the machine and looks for an existing signed-in session across local storage locations:
-   - The Windows Credential Manager entry `gemini:antigravity` (created by `agy`).
-   - The Antigravity IDE state database at `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` (opened with Win32 `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` so it can be read while Antigravity IDE has the SQLite database open).
-   - The Antigravity ACP token file at `%USERPROFILE%\.gemini\antigravity-acp\acp_token.json`.
-2. **Dynamic Token Refresh (Zero Bundled Secrets):** The application does not embed any Google OAuth `client_id` or `client_secret` in its source code or compiled executable, nor does it run a custom OAuth login web server. When a stored `access_token` expires, the backend reads the OAuth client identifier and secret directly from the user's locally installed `agy.exe` or `language_server_windows_x64.exe` binary on disk, exchanges the local `refresh_token` with `https://oauth2.googleapis.com/token`, caches the resulting short-lived access token in memory, and immediately trims temporary startup pages from the process working set via `K32EmptyWorkingSet`.
-3. **Quota & Model Retrieval:** Using the valid access token, a single-threaded background `tokio` worker queries the Antigravity quota endpoints (`loadCodeAssist`, `retrieveUserQuotaSummary`, and `fetchAvailableModels` on `https://daily-cloudcode-pa.googleapis.com` every 5 minutes, with local 60-second countdown ticks), checks active OS file locks on `.lock` files in `%USERPROFILE%\.gemini\antigravity\presence` and `%USERPROFILE%\.gemini\antigravity-cli\presence` (plus active IDE log/SHM locks), and notifies the native Win32 UI thread via `PostMessageW`.
-4. **Pure Native Win32 Taskbar Widget + Hover Flyout Presentation (`~1.7 MB` RAM):**
-   - **Taskbar Pill (`AGYPillNativeWnd`, `124×38 px` logical):** Rendered via a custom anti-aliased 32-bit `DIBSection` SDF rasterizer and ClearType `Segoe UI` fonts. Owned by `Shell_TrayWnd` (`GWLP_HWNDPARENT`) and composited by DWM directly above the taskbar's XAML layer, it samples the taskbar pixel color via Win32 `GetPixel` and alternates every 10 seconds between **5-Hour (`Flash 5h` / `Argon 5h`)** and **Weekly (`Flash Wk` / `Argon Wk`)** remaining or used quotas.
-   - **Placement Over the Windows 11 Weather / Temperature Area:** By default, the pill is positioned at the far-left edge of the taskbar (`x = 8 px` scaled for DPI), which is the slot normally used by the Windows 11 Weather / Temperature ("Widgets") button. When running in its default position, this widget sits directly over that Weather / Temperature notification area (or occupies that empty left corner if Windows Widgets are disabled in Taskbar settings). If you prefer to keep the Windows Weather / Temperature button visible alongside the quota monitor, you can drag the quota pill horizontally along the taskbar with the left mouse button; its chosen horizontal offset is saved automatically.
-   - **Hover Flyout Dashboard (`AGYFlyoutNativeWnd`, `368×440 px` logical):** Moving the mouse cursor over the taskbar pill opens a hardware-rounded DWM Flyout window directly above the taskbar containing:
-     - **Side-by-Side 5h & Weekly Summary Cards:** Shows both 5-hour (`5h`) and 7-day (`7d`) windows side-by-side for Gemini and Claude model groups with percentages, reset countdown timers (`⏱`), and gradient progress bars.
-     - **Per-Model Breakdown Grid:** Lists individual model quotas (`Gemini 3.8 Flash`, `Gemini 4 Argon`, `Claude Opus 5.5`, `Claude Sonnet 5.5`, etc.) in a scrollable 2-column grid directly below the summary cards.
-     - **Header Controls & Info Drawer:** Includes a `Left %` / `Used %` mode toggle, 12-language native popup menu (`TrackPopupMenu`), Windows Autostart toggle (`⚡`), collapsible connection/about info drawer (`ⓘ`), manual refresh button (`↻`), and application quit button (`⏻`), plus an account switcher, active session counter, and interactive window opacity slider in the footer.
+On startup, the application checks whether Antigravity CLI or IDE is installed and looks for a local session in three places:
+- Windows Credential Manager (`gemini:antigravity`, used by `agy`).
+- Antigravity IDE's SQLite database at `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` (opened with `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` so it works while the IDE is running).
+- The ACP token file at `%USERPROFILE%\.gemini\antigravity-acp\acp_token.json`.
 
----
+When a stored `access_token` expires, `refresh_with_local_oauth_client()` scans the local `agy.exe` or `language_server_windows_x64.exe` binary on disk for `.apps.googleusercontent.com` client IDs and `GOCSPX-` secrets, exchanges the local `refresh_token` against `https://oauth2.googleapis.com/token`, caches the new token in memory, and calls `K32EmptyWorkingSet` so temporary file buffers are freed right away.
 
-## Technical Architecture and Details
+Every 5 minutes, a single-threaded background `tokio` worker queries `loadCodeAssist`, `retrieveUserQuotaSummary`, and `fetchAvailableModels` on `https://daily-cloudcode-pa.googleapis.com`, counts active `.lock` files in `%USERPROFILE%\.gemini\antigravity\presence` and `%USERPROFILE%\.gemini\antigravity-cli\presence`, and posts a message (`PostMessageW`) to the Win32 UI thread. Between API polls, a 60-second timer ticks down the displayed reset timers locally.
 
-### Stack and Crate Dependencies
+The UI consists of two native Win32 windows in `src/ui_win32.rs`:
+- `AGYPillNativeWnd` (`124x38 px` logical): A top-level `WS_POPUP | WS_EX_TOPMOST | WS_EX_LAYERED` window owned by `Shell_TrayWnd` (`GWLP_HWNDPARENT`) so DWM draws it above the Windows 11 XAML taskbar layer. It samples the taskbar color via `GetPixel` and flips between `5h` and `Wk` views every 10 seconds.
+- `AGYFlyoutNativeWnd` (`368x440 px` logical): Opens above the taskbar on hover. It renders side-by-side `5h` and `7d` cards for Gemini and Claude, a scrollable 2-column grid of per-model quotas, header buttons (`Left %` / `Used %` toggle, 12-language menu via `TrackPopupMenu`, Autostart `⚡`, Info drawer `ⓘ`, Refresh `↻`, Quit `⏻`), and a footer with an account switcher, active session count, and window opacity slider.
 
-- **UI & Rendering (`src/ui_win32.rs`):** 100% native Win32 (`user32`, `gdi32`, `dwmapi`) with Per-Monitor DPI Awareness V2, 32-bit top-down `DIBSection` signed-distance-field (SDF) anti-aliased primitives, and ClearType `DrawTextW` typography. Zero WebView2, Chromium, or GPU browser processes.
-- **Networking & Auth (`src/main.rs`):** Rust (2021 edition) with a single-threaded `tokio` runtime and `reqwest` v0.12 (`rustls-tls`, no OpenSSL dependency).
-- **Zero External Win32 Crates:** Direct `extern "system"` FFI bindings to `user32`, `gdi32`, `dwmapi`, `advapi32`, and `kernel32`.
+## Technical Details
 
-### Project Structure
+- UI and rendering (`src/ui_win32.rs`): Direct Win32 FFI (`user32`, `gdi32`, `dwmapi`) with Per-Monitor DPI Awareness V2, 32-bit top-down `DIBSection` software SDF anti-aliased shapes (`fill_round_rect`, `fill_round_rect_gradient`, `stroke_round_rect`, `fill_circle`, `draw_line_aa`), and ClearType `DrawTextW` text using `Segoe UI`.
+- Networking and credentials (`src/main.rs`): Rust (2021 edition) with a single-threaded `tokio` runtime, `reqwest` v0.12 (`rustls-tls`, no OpenSSL), and direct `advapi32` / `kernel32` FFI bindings (`CredReadW`, `CredFree`, `RegOpenKeyExW`, `RegSetValueExW`, `K32EmptyWorkingSet`).
 
 ```text
 .
@@ -48,106 +53,60 @@ Without a dedicated monitor, checking how much quota remains or when a depleted 
 │   └── icon.ico               # Windows installer and shortcut icon
 ├── src/
 │   ├── main.rs                # Credential readers, binary OAuth scanner, API client, taskbar geometry, and autostart
-│   └── ui_win32.rs            # Pure Win32 window classes, SDF 2D canvas, ClearType text, and interactive Flyout UI
-└── locales/                   # Embedded JSON language packs (ET, EN-US, EN-GB, LV, LT, FI, DE, SV, PL, FR, ES, UK)
-    ├── en-US.json
-    ├── en-GB.json
-    ├── et.json
-    ├── lv.json
-    ├── lt.json
-    ├── fi.json
-    ├── de.json
-    ├── sv.json
-    ├── pl.json
-    ├── fr.json
-    ├── es.json
-    └── uk.json
+│   └── ui_win32.rs            # Win32 window classes, SDF 2D canvas, ClearType text, and Flyout UI
+└── locales/                   # JSON language packs (ET, EN-US, EN-GB, LV, LT, FI, DE, SV, PL, FR, ES, UK)
 ```
 
-### Key Internal Mechanisms
+## Installation and Removal
 
-- **`embed_pill_into_taskbar()` & `raise_pill_in_taskbar()` (`src/main.rs`):** Locates `Shell_TrayWnd` and `TrayNotifyWnd`, assigns `Shell_TrayWnd` as the owner (`GWLP_HWNDPARENT`) of the top-level `WS_POPUP | WS_EX_TOPMOST | WS_EX_LAYERED` pill window so DWM renders it above the Windows 11 XAML taskbar island, and clamps its horizontal range so it never overlaps the right-hand system tray (`TrayNotifyWnd`).
-- **`Canvas` & SDF Primitives (`src/ui_win32.rs`):** Renders anti-aliased rounded rectangles, horizontal gradients, borders, and vector icons directly into a 32-bit ARGB memory bitmap and blits to the window DC in a single pass.
-- **`load_all_stored_credentials()` (`src/main.rs`):** Checks `gemini:antigravity` in Windows Credential Manager (`CredReadW`) and `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` (opened with `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`), decoding protobuf/Base64 token entries and falling back to `acp_token.json` if present.
-- **`extract_oauth_clients_from_binary()` & `refresh_with_local_oauth_client()` (`src/main.rs`):** Scans the locally installed `agy.exe` or `language_server_windows_x64.exe` binary for `.apps.googleusercontent.com` client IDs and `GOCSPX-` secrets, caches the working pair in memory, and calls `K32EmptyWorkingSet` immediately after scanning so file buffers are released back to the OS.
-- **`set_autostart_sync()` (`src/main.rs`):** Copies the running binary to `%LOCALAPPDATA%\Programs\AntigravityQuotaMonitor\antigravity-quota-monitor.exe` (if launched from another directory), creates a Start Menu shortcut at `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Antigravity Quota Monitor.lnk`, and manages the `AntigravityQuotaMonitor` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+### Prerequisites
 
----
+- Windows 10 or Windows 11 (x64). No WebView2 or external runtime is needed.
+- Google Antigravity CLI (`%LOCALAPPDATA%\agy\bin\agy.exe`) or Antigravity IDE (`%LOCALAPPDATA%\Programs\Antigravity-IDE\Antigravity IDE.exe`) installed and signed in.
 
-## Installation, Auto-Start, and Setup
+### Option 1: Windows Setup Installer
 
-### Runtime Prerequisites
+Download `antigravity-quota-monitor-windows-x64-setup.exe` from [GitHub Releases](https://github.com/sidequest-chain/antigravity-quota-monitor/releases) and run it. It does not require administrator rights. It installs the binary to `%LOCALAPPDATA%\Programs\AntigravityQuotaMonitor`, creates a Start Menu shortcut and Windows *Installed Apps* uninstaller, enables Windows login auto-start, and starts the widget.
 
-1. **Operating System:** Windows 10 or Windows 11 (x86_64). No WebView2 or external runtime is required.
-2. **Antigravity Installation:** You must have either **Google Antigravity CLI (`agy`)** or **Antigravity IDE** installed and signed in on your machine:
-   - CLI binary path checked: `%LOCALAPPDATA%\agy\bin\agy.exe`
-   - IDE binary path checked: `%LOCALAPPDATA%\Programs\Antigravity-IDE\Antigravity IDE.exe` (or `Antigravity IDE`)
+### Option 2: Portable Binary
 
-### Option 1: Install via Prebuilt Windows Setup Installer (Recommended)
-
-Download `antigravity-quota-monitor-windows-x64-setup.exe` from the [GitHub Releases](https://github.com/sidequest-chain/antigravity-quota-monitor/releases) page and run it. The installer requires no administrator elevation and performs the following steps automatically:
-
-1. Installs the binary to `%LOCALAPPDATA%\Programs\AntigravityQuotaMonitor\antigravity-quota-monitor.exe`.
-2. Creates a Start Menu shortcut (`Antigravity Quota Monitor`) and an uninstaller entry in Windows *Installed Apps*.
-3. Registers `AntigravityQuotaMonitor` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` so the taskbar widget starts automatically whenever you sign in to Windows.
-4. Launches the taskbar widget immediately upon completion.
-
-### Option 2: Portable Binary & Self-Install Flags
-
-If you download the standalone `antigravity-quota-monitor-windows-x64.exe` binary (or compile it from source), you can run it directly from any folder, toggle Windows auto-start using the `⚡` button in the Flyout header, or install/uninstall it from PowerShell:
+Download `antigravity-quota-monitor-windows-x64.exe` and run it from any folder. You can also install or uninstall it from PowerShell:
 
 ```powershell
-# Copy to %LOCALAPPDATA%\Programs\AntigravityQuotaMonitor, create Start Menu shortcut, enable Windows auto-start, and launch
+# Copy to %LOCALAPPDATA%\Programs\AntigravityQuotaMonitor, create Start Menu shortcut, enable auto-start, and launch
 .\antigravity-quota-monitor.exe --install
 
-# Remove Windows auto-start registry entry and Start Menu shortcut
+# Remove auto-start registry entry and Start Menu shortcut
 .\antigravity-quota-monitor.exe --uninstall
 ```
 
-### Option 3: Building from Source
+### How to Quit or Uninstall
 
-To compile the standalone release executable on Windows, you need the Rust toolchain (`rustup` + `cargo`) with the `x86_64-pc-windows-msvc` target and Visual Studio C++ Build Tools.
+- Quit the running widget: Hover over the taskbar pill and click `⏻` in the top-right corner of the Flyout.
+- Turn off Windows login auto-start: Hover over the taskbar pill and click `⚡` in the Flyout header so it turns grey.
+- Uninstall completely: Open Windows *Settings -> Apps -> Installed apps*, find **Antigravity Quota Monitor**, and click **Uninstall** (or run `%LOCALAPPDATA%\Programs\AntigravityQuotaMonitor\Uninstall.exe`). Saved window position and preferences live in `%USERPROFILE%\.gemini\antigravity-cli\window_state.json`.
+
+### Building from Source
+
+Requires Rust (`rustup` + `cargo`) with the `x86_64-pc-windows-msvc` toolchain and Visual Studio C++ Build Tools:
 
 ```powershell
-# 1. Clone the repository
 git clone https://github.com/sidequest-chain/antigravity-quota-monitor.git
 cd antigravity-quota-monitor
-
-# 2. Compile the optimized, stripped release binary
 cargo build --release
-
-# 3. Install into %LOCALAPPDATA%\Programs\AntigravityQuotaMonitor with Windows auto-start enabled
-.\target\release\antigravity-quota-monitor.exe --install
+.\target\release\antigravity-quota-monitor.exe
 ```
 
-The compiled executable (`target\release\antigravity-quota-monitor.exe`, ~2.5 MB) is 100% self-contained with all 12 locale JSON files embedded at compile time.
+## Scope and Limitations
 
-### Automated GitHub Actions Builds & Releases
+- Windows only: Uses Win32 `CredReadW` and `Shell_TrayWnd`. Linux and macOS are not supported.
+- Read-only session access: Never writes to Windows Credential Manager or `state.vscdb`. Initial sign-in and account switching happen in the official Antigravity CLI or IDE.
+- Internal API endpoints: Reads quota data from `daily-cloudcode-pa.googleapis.com/v1internal:*`. If Google changes those response payloads in a future update, `fetch_usage_internal()` in `src/main.rs` will need updating.
 
-The repository includes an automated GitHub Actions pipeline (`.github/workflows/build.yml`) running on `windows-latest`:
+## License and Disclaimer
 
-- **On pushes to `main` or version tags (`v*`, e.g., `v0.3.0`):**
-  1. Compiles the stripped Windows x64 portable executable (`antigravity-quota-monitor-windows-x64.exe`).
-  2. Builds the NSIS Windows Setup installer (`antigravity-quota-monitor-windows-x64-setup.exe`) via `makensis installer.nsi`.
-  3. Generates SHA-256 checksums (`SHA256SUMS.txt`) for both executables.
-  4. Attaches all three files as workflow artifacts and publishes them to the corresponding GitHub Release.
+- Author: [sidequest-chain](https://github.com/sidequest-chain)
+- Repository: [github.com/sidequest-chain/antigravity-quota-monitor](https://github.com/sidequest-chain/antigravity-quota-monitor)
+- License: MIT License (provided `"AS IS"`, without warranty of any kind). See [LICENSE](LICENSE).
 
----
-
-## Current Scope and Limitations
-
-- **Windows-Only Credential and Taskbar Integration:** Credential lookup uses Win32 `CredReadW` and taskbar integration targets the Windows `Shell_TrayWnd` window class. Linux and macOS are not supported.
-- **Taskbar Left-Edge Weather / Widgets Slot:** Because the `pill` window is positioned over `Shell_TrayWnd` on the far-left side of the taskbar by default, it covers the area where Windows 11 normally renders the Weather / Temperature ("Widgets") button. Users who want both visible can either drag the quota pill to the right along the taskbar or disable the Windows Widgets button in *Settings → Personalization → Taskbar*.
-- **Read-Only Session Consumer:** This utility never writes or modifies credentials in Windows Credential Manager or `state.vscdb`. Initial authentication and account switching must be performed inside the official Antigravity CLI (`agy`) or Antigravity IDE.
-- **Internal API Dependency:** Quota data is retrieved from Google's `daily-cloudcode-pa.googleapis.com/v1internal:*` endpoints used by the Antigravity client. If Google changes the response schema of those internal endpoints in a future release, the parser in `fetch_usage_internal()` will require an update.
-- **Multi-Language UI (`locales/*.json`):** User-facing strings live in JSON translation files (`et`, `en-US`, `en-GB`, `lv`, `lt`, `fi`, `de`, `sv`, `pl`, `fr`, `es`, `uk`).
-
----
-
-## Author, License & Non-Affiliation Disclaimer
-
-- **Author:** [sidequest-chain](https://github.com/sidequest-chain)
-- **Repository:** [github.com/sidequest-chain/antigravity-quota-monitor](https://github.com/sidequest-chain/antigravity-quota-monitor)
-- **License:** Licensed under the **MIT License** (provided `"AS IS"`, without warranty of any kind) — see [LICENSE](LICENSE).
-
-**Non-Affiliation Disclaimer:** This software is an independent, unofficial open-source companion utility and is **not** affiliated with, endorsed by, sponsored by, or supported by Google LLC or Anthropic PBC. It contains no proprietary keys or credentials and operates exclusively on the user's own local installation.
+This project is an independent open-source utility and is not affiliated with, endorsed by, or supported by Google LLC or Anthropic PBC.
