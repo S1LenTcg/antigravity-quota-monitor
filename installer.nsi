@@ -2,7 +2,7 @@ Unicode True
 !include "MUI2.nsh"
 
 !ifndef APP_VERSION
-  !define APP_VERSION "0.2.0"
+  !define APP_VERSION "0.3.0"
 !endif
 
 Name "Antigravity Quota Monitor ${APP_VERSION}"

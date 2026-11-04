@@ -6,9 +6,8 @@ on:
       - main
     paths:
       - "src/**"
-      - "ui/**"
+      - "locales/**"
       - "Cargo.toml"
-      - "tauri.conf.json"
       - "installer.nsi"
       - ".github/workflows/build.yml"
     tags:

@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ui_win32;
+
 use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine as _,
@@ -15,59 +17,57 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{Manager, State};
 use tokio::sync::Mutex;
-use windows_sys::Win32::Security::Credentials::{
-    CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
-};
 
 const API_BASE: &str = "https://daily-cloudcode-pa.googleapis.com";
 const AGY_CRED_TARGET: &str = "gemini:antigravity";
+const CRED_TYPE_GENERIC: u32 = 1;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-const GWL_STYLE: i32 = -16;
-const GWL_EXSTYLE: i32 = -20;
-const WS_CHILD: i32 = 0x40000000;
-const WS_VISIBLE: i32 = 0x10000000;
-const WS_CLIPSIBLINGS: i32 = 0x04000000;
-const WS_POPUP: i32 = -2147483648; // 0x80000000
-const WS_EX_LAYERED: i32 = 0x00080000;
-const WS_EX_TOOLWINDOW: i32 = 0x00000080;
-const WS_EX_NOACTIVATE: i32 = 0x08000000;
-const LWA_ALPHA: u32 = 0x00000002;
-const VK_LBUTTON: i32 = 0x01;
-const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-const DWMWA_BORDER_COLOR: u32 = 34;
-const DWMWCP_DONOTROUND: u32 = 1;
-const DWMWCP_ROUND: u32 = 2;
-const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
-const DWMWA_COLOR_DEFAULT: u32 = 0xFFFFFFFF;
-const HWND_TOP: isize = 0;
-const HWND_TOPMOST: isize = -1;
-const SWP_NOSIZE: u32 = 0x0001;
-const SWP_NOMOVE: u32 = 0x0002;
-const SWP_NOACTIVATE: u32 = 0x0010;
-const SWP_FRAMECHANGED: u32 = 0x0020;
-const SWP_SHOWWINDOW: u32 = 0x0040;
-const MONITOR_DEFAULTTONEAREST: u32 = 0x00000002;
-const PILL_WIDTH_LOGICAL: f64 = 124.0;
-const PILL_HEIGHT_LOGICAL: f64 = 38.0;
-const FULL_WIDTH_LOGICAL: f64 = 368.0;
-const FULL_HEIGHT_LOGICAL: f64 = 440.0;
+
+pub(crate) const GWL_STYLE: i32 = -16;
+pub(crate) const GWL_EXSTYLE: i32 = -20;
+pub(crate) const GWLP_HWNDPARENT: i32 = -8;
+pub(crate) const WS_VISIBLE: i32 = 0x10000000;
+pub(crate) const WS_POPUP: i32 = -2147483648; // 0x80000000
+pub(crate) const WS_EX_TOPMOST: i32 = 0x00000008;
+pub(crate) const WS_EX_LAYERED: i32 = 0x00080000;
+pub(crate) const WS_EX_TOOLWINDOW: i32 = 0x00000080;
+pub(crate) const WS_EX_NOACTIVATE: i32 = 0x08000000;
+pub(crate) const LWA_ALPHA: u32 = 0x00000002;
+pub(crate) const VK_LBUTTON: i32 = 0x01;
+pub(crate) const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+pub(crate) const DWMWA_BORDER_COLOR: u32 = 34;
+pub(crate) const DWMWCP_DONOTROUND: u32 = 1;
+pub(crate) const DWMWCP_ROUND: u32 = 2;
+pub(crate) const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
+pub(crate) const DWMWA_COLOR_DEFAULT: u32 = 0xFFFFFFFF;
+pub(crate) const HWND_TOPMOST: isize = -1;
+pub(crate) const SWP_NOSIZE: u32 = 0x0001;
+pub(crate) const SWP_NOMOVE: u32 = 0x0002;
+pub(crate) const SWP_NOACTIVATE: u32 = 0x0010;
+pub(crate) const SWP_FRAMECHANGED: u32 = 0x0020;
+pub(crate) const SWP_SHOWWINDOW: u32 = 0x0040;
+pub(crate) const MONITOR_DEFAULTTONEAREST: u32 = 0x00000002;
+
+pub(crate) const PILL_WIDTH_LOGICAL: f64 = 124.0;
+pub(crate) const PILL_HEIGHT_LOGICAL: f64 = 38.0;
+pub(crate) const FULL_WIDTH_LOGICAL: f64 = 368.0;
+pub(crate) const FULL_HEIGHT_LOGICAL: f64 = 440.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-struct WinPoint {
-    x: i32,
-    y: i32,
+pub(crate) struct WinPoint {
+    pub x: i32,
+    pub y: i32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-struct WinRect {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
+pub(crate) struct WinRect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
 }
 
 #[repr(C)]
@@ -79,14 +79,35 @@ struct MonitorInfo {
     dw_flags: u32,
 }
 
+#[repr(C)]
+struct FileTime {
+    dw_low_date_time: u32,
+    dw_high_date_time: u32,
+}
+
+#[repr(C)]
+struct CredentialW {
+    flags: u32,
+    cred_type: u32,
+    target_name: *mut u16,
+    comment: *mut u16,
+    last_written: FileTime,
+    credential_blob_size: u32,
+    credential_blob: *mut u8,
+    persist: u32,
+    attribute_count: u32,
+    attributes: *mut std::ffi::c_void,
+    target_alias: *mut u16,
+    user_name: *mut u16,
+}
+
 #[link(name = "user32")]
 extern "system" {
-    fn GetWindowLongW(hwnd: isize, index: i32) -> i32;
-    fn SetWindowLongW(hwnd: isize, index: i32, new_long: i32) -> i32;
-    fn SetLayeredWindowAttributes(hwnd: isize, cr_key: u32, alpha: u8, flags: u32) -> i32;
-    fn GetAsyncKeyState(vkey: i32) -> i16;
-    fn GetCursorPos(lp_point: *mut WinPoint) -> i32;
-    fn GetWindowRect(hwnd: isize, lp_rect: *mut WinRect) -> i32;
+    pub(crate) fn GetWindowLongW(hwnd: isize, index: i32) -> i32;
+    pub(crate) fn SetWindowLongW(hwnd: isize, index: i32, new_long: i32) -> i32;
+    pub(crate) fn SetWindowLongPtrW(hwnd: isize, index: i32, new_long: isize) -> isize;
+    pub(crate) fn SetLayeredWindowAttributes(hwnd: isize, cr_key: u32, alpha: u8, flags: u32) -> i32;
+    pub(crate) fn GetWindowRect(hwnd: isize, lp_rect: *mut WinRect) -> i32;
     fn FindWindowW(lp_class_name: *const u16, lp_window_name: *const u16) -> isize;
     fn FindWindowExW(
         hwnd_parent: isize,
@@ -94,7 +115,7 @@ extern "system" {
         lpsz_class: *const u16,
         lpsz_window: *const u16,
     ) -> isize;
-    fn SetWindowPos(
+    pub(crate) fn SetWindowPos(
         hwnd: isize,
         hwnd_insert_after: isize,
         x: i32,
@@ -109,8 +130,12 @@ extern "system" {
     fn GetDpiForWindow(hwnd: isize) -> u32;
     fn GetDC(hwnd: isize) -> isize;
     fn ReleaseDC(hwnd: isize, hdc: isize) -> i32;
-    fn SetParent(hwnd_child: isize, hwnd_new_parent: isize) -> isize;
-    fn GetParent(hwnd: isize) -> isize;
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetCurrentProcess() -> isize;
+    fn K32EmptyWorkingSet(h_process: isize) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -120,24 +145,58 @@ extern "system" {
 
 #[link(name = "dwmapi")]
 extern "system" {
-    fn DwmSetWindowAttribute(hwnd: isize, attr: u32, pv_attr: *const u32, cb_attr: u32) -> i32;
+    pub(crate) fn DwmSetWindowAttribute(
+        hwnd: isize,
+        attr: u32,
+        pv_attr: *const u32,
+        cb_attr: u32,
+    ) -> i32;
 }
 
-fn apply_hwnd_opacity(hwnd: isize, percent: u8) {
+#[link(name = "advapi32")]
+extern "system" {
+    fn CredReadW(
+        target_name: *const u16,
+        cred_type: u32,
+        flags: u32,
+        credential: *mut *mut CredentialW,
+    ) -> i32;
+    fn CredFree(buffer: *const std::ffi::c_void);
+    fn RegOpenKeyExW(
+        hkey: isize,
+        lp_sub_key: *const u16,
+        ul_options: u32,
+        sam_desired: u32,
+        phk_result: *mut isize,
+    ) -> i32;
+    fn RegQueryValueExW(
+        hkey: isize,
+        lp_value_name: *const u16,
+        lp_reserved: *const u32,
+        lp_type: *mut u32,
+        lp_data: *mut u8,
+        lpcb_data: *mut u32,
+    ) -> i32;
+    fn RegSetValueExW(
+        hkey: isize,
+        lp_value_name: *const u16,
+        reserved: u32,
+        dw_type: u32,
+        lp_data: *const u8,
+        cb_data: u32,
+    ) -> i32;
+    fn RegDeleteValueW(hkey: isize, lp_value_name: *const u16) -> i32;
+    fn RegCloseKey(hkey: isize) -> i32;
+}
+
+pub(crate) fn trim_process_working_set() {
     unsafe {
-        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
-        if percent >= 100 {
-            if (ex & WS_EX_LAYERED) != 0 {
-                SetWindowLongW(hwnd, GWL_EXSTYLE, ex & !WS_EX_LAYERED);
-            }
-        } else {
-            if (ex & WS_EX_LAYERED) == 0 {
-                SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED);
-            }
-            let alpha = ((percent as u32 * 255) / 100).clamp(90, 255) as u8;
-            SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
-        }
+        let _ = K32EmptyWorkingSet(GetCurrentProcess());
     }
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE").map(PathBuf::from)
 }
 
 fn apply_hwnd_taskbar_style(hwnd: isize, is_taskbar_pill: bool) {
@@ -155,13 +214,13 @@ fn apply_hwnd_taskbar_style(hwnd: isize, is_taskbar_pill: bool) {
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
-            &corner_pref as *const u32,
+            &corner_pref,
             std::mem::size_of::<u32>() as u32,
         );
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_BORDER_COLOR,
-            &border_col as *const u32,
+            &border_col,
             std::mem::size_of::<u32>() as u32,
         );
     }
@@ -187,7 +246,7 @@ fn sample_taskbar_color(px: i32, py: i32, pill_h: i32) -> Option<String> {
     }
 }
 
-fn get_hwnd_scale(hwnd: isize) -> f64 {
+pub(crate) fn get_hwnd_scale(hwnd: isize) -> f64 {
     unsafe {
         let dpi = GetDpiForWindow(hwnd);
         if dpi == 0 {
@@ -219,23 +278,17 @@ fn get_work_area_from_hmonitor(hmon: isize) -> WinRect {
     }
 }
 
-fn get_work_area_for_point(x: i32, y: i32) -> WinRect {
+pub(crate) fn get_work_area_for_point(x: i32, y: i32) -> WinRect {
     let hmon = unsafe { MonitorFromPoint(WinPoint { x, y }, MONITOR_DEFAULTTONEAREST) };
     get_work_area_from_hmonitor(hmon)
 }
 
-fn get_work_area_for_hwnd(hwnd: isize) -> WinRect {
+pub(crate) fn get_work_area_for_hwnd(hwnd: isize) -> WinRect {
     let hmon = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
     get_work_area_from_hmonitor(hmon)
 }
 
-fn set_hwnd_bounds(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
-    unsafe {
-        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE);
-    }
-}
-
-fn raise_hwnd_topmost(hwnd: isize) {
+pub(crate) fn raise_hwnd_topmost(hwnd: isize) {
     unsafe {
         let _ = SetWindowPos(
             hwnd,
@@ -254,7 +307,7 @@ fn find_taskbar_hwnd() -> isize {
     unsafe { FindWindowW(tray_class.as_ptr(), std::ptr::null()) }
 }
 
-fn get_taskbar_rects(scale: f64, work: WinRect) -> (WinRect, Option<WinRect>) {
+pub(crate) fn get_taskbar_rects(scale: f64, work: WinRect) -> (WinRect, Option<WinRect>) {
     let notify_class = to_wide("TrayNotifyWnd");
     unsafe {
         let tray_hwnd = find_taskbar_hwnd();
@@ -289,14 +342,15 @@ fn get_taskbar_rects(scale: f64, work: WinRect) -> (WinRect, Option<WinRect>) {
     )
 }
 
-/// Embeds the `pill` window directly inside `Shell_TrayWnd` via Win32 `SetParent` on the left "Widgets" area.
-/// Returns `(rel_x, screen_x, screen_y, pill_w, pill_h, sampled_color)`.
-fn embed_pill_into_taskbar(
+/// Positions the `pill` window as a top-level layered popup owned by `Shell_TrayWnd`
+/// directly over the left "Widgets" area of the Windows 11 taskbar.
+/// Returns `(rel_x, sampled_color)`.
+pub(crate) fn embed_pill_into_taskbar(
     pill_hwnd: isize,
     desired_rel_x: i32,
     scale: f64,
     work: WinRect,
-) -> (i32, i32, i32, i32, i32, Option<String>) {
+) -> (i32, Option<String>) {
     let pill_w = (PILL_WIDTH_LOGICAL * scale).round() as i32;
     let pill_h = (PILL_HEIGHT_LOGICAL * scale).round() as i32;
     let (tb_rect, notify_opt) = get_taskbar_rects(scale, work);
@@ -309,7 +363,6 @@ fn embed_pill_into_taskbar(
         .unwrap_or(tb_w - pill_w - min_rel_x)
         .max(min_rel_x);
 
-    // Default to the left "Widgets" slot on the Windows 11 taskbar
     let rel_x = if desired_rel_x <= 0 {
         min_rel_x
     } else {
@@ -319,134 +372,81 @@ fn embed_pill_into_taskbar(
     let screen_x = tb_rect.left + rel_x;
     let screen_y = tb_rect.top + rel_y;
 
-    // Sample taskbar color slightly to the right of the pill inside the taskbar
     let sample_x = (screen_x + pill_w + (10.0 * scale).round() as i32).min(tb_rect.right - 20);
     let sampled_col = sample_taskbar_color(sample_x, tb_rect.top, tb_h);
 
     apply_hwnd_taskbar_style(pill_hwnd, true);
-    apply_hwnd_opacity(pill_hwnd, 100);
 
     unsafe {
         let tray_hwnd = find_taskbar_hwnd();
-        if tray_hwnd != 0 {
-            if GetParent(pill_hwnd) != tray_hwnd {
-                let style = GetWindowLongW(pill_hwnd, GWL_STYLE);
-                SetWindowLongW(
-                    pill_hwnd,
-                    GWL_STYLE,
-                    (style & !WS_POPUP) | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-                );
-                let ex = GetWindowLongW(pill_hwnd, GWL_EXSTYLE);
-                SetWindowLongW(
-                    pill_hwnd,
-                    GWL_EXSTYLE,
-                    (ex & !WS_EX_LAYERED) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                );
-                let _ = SetParent(pill_hwnd, tray_hwnd);
-            }
-            let _ = SetWindowPos(
-                pill_hwnd,
-                HWND_TOP,
-                rel_x,
-                rel_y,
-                pill_w,
-                pill_h,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
-            );
-        } else {
-            let _ = SetWindowPos(
-                pill_hwnd,
-                HWND_TOPMOST,
-                screen_x,
-                screen_y,
-                pill_w,
-                pill_h,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
+        let style = GetWindowLongW(pill_hwnd, GWL_STYLE);
+        if (style & WS_POPUP) == 0 || (style & WS_VISIBLE) == 0 {
+            SetWindowLongW(pill_hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
         }
+        let ex = GetWindowLongW(pill_hwnd, GWL_EXSTYLE);
+        let target_ex =
+            ex | WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+        if ex != target_ex {
+            SetWindowLongW(pill_hwnd, GWL_EXSTYLE, target_ex);
+        }
+        if tray_hwnd != 0 {
+            let _ = SetWindowLongPtrW(pill_hwnd, GWLP_HWNDPARENT, tray_hwnd);
+        }
+        let _ = SetLayeredWindowAttributes(pill_hwnd, 0, 255, LWA_ALPHA);
+        let _ = SetWindowPos(
+            pill_hwnd,
+            HWND_TOPMOST,
+            screen_x,
+            screen_y,
+            pill_w,
+            pill_h,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
+        );
     }
 
-    (rel_x, screen_x, screen_y, pill_w, pill_h, sampled_col)
+    (rel_x, sampled_col)
 }
 
-fn raise_pill_in_taskbar(pill_hwnd: isize, rel_x: i32, scale: f64, work: WinRect) {
-    let tray_hwnd = find_taskbar_hwnd();
-    if tray_hwnd != 0 {
-        unsafe {
-            if GetParent(pill_hwnd) != tray_hwnd {
-                let _ = embed_pill_into_taskbar(pill_hwnd, rel_x, scale, work);
-            } else {
-                let _ = SetWindowPos(
-                    pill_hwnd,
-                    HWND_TOP,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                );
-            }
+pub(crate) fn raise_pill_in_taskbar(pill_hwnd: isize) {
+    unsafe {
+        let tray_hwnd = find_taskbar_hwnd();
+        if tray_hwnd != 0 {
+            let _ = SetWindowLongPtrW(pill_hwnd, GWLP_HWNDPARENT, tray_hwnd);
         }
+        let _ = SetWindowPos(
+            pill_hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct SavedWindowState {
-    anchor_x: i32,
-    anchor_y: i32,
-    dock_edge: String,
-    opacity: u8,
-    always_on_top: bool,
+pub(crate) struct SavedWindowState {
     #[serde(default)]
-    is_pinned: bool,
+    pub anchor_x: i32,
+    #[serde(default = "default_opacity")]
+    pub opacity: u8,
+    #[serde(default)]
+    pub locale: Option<String>,
+    #[serde(default)]
+    pub show_remaining: Option<bool>,
 }
 
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-struct DockStateView {
-    is_collapsed: bool,
-    dock_edge: String,
-    is_pinned: bool,
-    autostart: bool,
-    opacity: u8,
-    taskbar_color: Option<String>,
+fn default_opacity() -> u8 {
+    95
 }
 
 const AUTOSTART_REG_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const AUTOSTART_REG_NAME: &str = "AntigravityQuotaMonitor";
-const HKEY_CURRENT_USER: isize = -2147483647isize; // 0x80000001u32 as i32 as isize
+const HKEY_CURRENT_USER: isize = -2147483647isize; // 0x80000001
 const KEY_READ: u32 = 0x20019;
 const KEY_SET_VALUE: u32 = 0x0002;
 const REG_SZ: u32 = 1;
-
-#[link(name = "advapi32")]
-extern "system" {
-    fn RegOpenKeyExW(
-        hkey: isize,
-        lp_sub_key: *const u16,
-        ul_options: u32,
-        sam_desired: u32,
-        phk_result: *mut isize,
-    ) -> i32;
-    fn RegQueryValueExW(
-        hkey: isize,
-        lp_value_name: *const u16,
-        lp_reserved: *const u32,
-        lp_type: *mut u32,
-        lp_data: *mut u8,
-        lpcb_data: *mut u32,
-    ) -> i32;
-    fn RegSetValueExW(
-        hkey: isize,
-        lp_value_name: *const u16,
-        reserved: u32,
-        dw_type: u32,
-        lp_data: *const u8,
-        cb_data: u32,
-    ) -> i32;
-    fn RegDeleteValueW(hkey: isize, lp_value_name: *const u16) -> i32;
-    fn RegCloseKey(hkey: isize) -> i32;
-}
 
 fn clean_windows_path(p: PathBuf) -> PathBuf {
     let s = p.to_string_lossy();
@@ -477,7 +477,7 @@ fn start_menu_shortcut_path() -> Option<PathBuf> {
     })
 }
 
-fn is_autostart_enabled_sync() -> bool {
+pub(crate) fn is_autostart_enabled_sync() -> bool {
     let subkey = to_wide(AUTOSTART_REG_SUBKEY);
     let val_name = to_wide(AUTOSTART_REG_NAME);
     unsafe {
@@ -543,7 +543,7 @@ fn remove_start_menu_shortcut_sync() {
     }
 }
 
-fn set_autostart_sync(enabled: bool) -> Result<bool, String> {
+pub(crate) fn set_autostart_sync(enabled: bool) -> Result<bool, String> {
     let subkey = to_wide(AUTOSTART_REG_SUBKEY);
     let val_name = to_wide(AUTOSTART_REG_NAME);
     if enabled {
@@ -597,15 +597,6 @@ fn set_autostart_sync(enabled: bool) -> Result<bool, String> {
     Ok(is_autostart_enabled_sync())
 }
 
-struct DockRuntime {
-    anchor_x: i32,
-    anchor_y: i32,
-    dock_edge: String,
-    is_dragging: bool,
-    is_pinned: bool,
-    taskbar_color: Option<String>,
-}
-
 fn window_state_path() -> Option<PathBuf> {
     agy_dir().map(|d| d.join("window_state.json"))
 }
@@ -616,7 +607,7 @@ fn load_saved_window_state() -> Option<SavedWindowState> {
     serde_json::from_str::<SavedWindowState>(&raw).ok()
 }
 
-fn save_window_state_sync(st: &SavedWindowState) {
+pub(crate) fn save_window_state_sync(st: &SavedWindowState) {
     if let Some(path) = window_state_path() {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
@@ -627,30 +618,24 @@ fn save_window_state_sync(st: &SavedWindowState) {
     }
 }
 
-struct AppState {
-    cached_token: Mutex<Option<(String, String, Instant)>>, // (access_token, email, expires_at)
-    cached_project_id: Mutex<Option<String>>,
-    cached_oauth_client: Mutex<Option<(String, String)>>, // Dynamically read from local CLI/IDE binary
-    cached_user_agent: Mutex<Option<String>>,             // Dynamically detected via `agy.exe --version`
-    window_opacity: Mutex<u8>,
-    dock: Mutex<DockRuntime>,
-    last_snapshot: Mutex<Option<UsageSnapshot>>,
-    show_remaining: Mutex<bool>,
-    http: reqwest::Client,
+pub(crate) struct AppState {
+    pub cached_token: Mutex<Option<(String, String, Instant)>>, // (access_token, email, expires_at)
+    pub cached_project_id: Mutex<Option<String>>,
+    pub cached_oauth_client: Mutex<Option<(String, String)>>, // Dynamically read from local CLI/IDE binary
+    pub cached_user_agent: Mutex<Option<String>>,             // Dynamically detected via `agy.exe --version`
+    pub http: reqwest::Client,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone)]
 struct StoredCred {
     token: Option<StoredOAuthToken>,
-    auth_method: Option<String>,
     id_token: Option<String>,
     id_token_email: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone)]
 struct StoredOAuthToken {
     access_token: Option<String>,
-    token_type: Option<String>,
     refresh_token: Option<String>,
     expiry: Option<String>,
 }
@@ -662,37 +647,27 @@ struct TokenExchangeResponse {
     expires_in: Option<u64>,
 }
 
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct QuotaBucketView {
-    pub id: String,
     pub group_key: String,
-    pub group_name: String,
-    pub group_description: String,
-    pub display_name: String,
     pub window: String,
     pub remaining_fraction: f64,
     pub remaining_percent: f64,
     pub used_percent: f64,
-    pub reset_time: Option<String>,
     pub reset_seconds: Option<i64>,
 }
 
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct ModelQuotaView {
-    pub id: String,
     pub display_name: String,
     pub family_key: String,
     pub remaining_fraction: f64,
     pub remaining_percent: f64,
     pub used_percent: f64,
-    pub reset_time: Option<String>,
     pub reset_seconds: Option<i64>,
 }
 
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct UsageSnapshot {
     pub installed: bool,
     pub authenticated: bool,
@@ -707,7 +682,7 @@ pub struct UsageSnapshot {
     pub updated_at: String,
 }
 
-fn to_wide(s: &str) -> Vec<u16> {
+pub(crate) fn to_wide(s: &str) -> Vec<u16> {
     let mut v: Vec<u16> = s.encode_utf16().collect();
     v.push(0);
     v
@@ -716,7 +691,7 @@ fn to_wide(s: &str) -> Vec<u16> {
 fn read_windows_credential(target: &str) -> Result<String, String> {
     let wide_target = to_wide(target);
     unsafe {
-        let mut cred_ptr: *mut CREDENTIALW = std::ptr::null_mut();
+        let mut cred_ptr: *mut CredentialW = std::ptr::null_mut();
         let ok = CredReadW(
             wide_target.as_ptr(),
             CRED_TYPE_GENERIC,
@@ -729,8 +704,8 @@ fn read_windows_credential(target: &str) -> Result<String, String> {
 
         let cred = &*cred_ptr;
         let slice = std::slice::from_raw_parts(
-            cred.CredentialBlob,
-            cred.CredentialBlobSize as usize,
+            cred.credential_blob,
+            cred.credential_blob_size as usize,
         );
         let text = String::from_utf8_lossy(slice).to_string();
         CredFree(cred_ptr as *const _);
@@ -741,7 +716,7 @@ fn read_windows_credential(target: &str) -> Result<String, String> {
 /// Locates installed Antigravity CLI (`agy.exe`) and IDE binaries on the user's machine.
 fn find_antigravity_binaries() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = home_dir() {
         let gemini_bin = home.join(".gemini").join("bin").join("agy.exe");
         if gemini_bin.is_file() {
             paths.push(gemini_bin);
@@ -806,7 +781,7 @@ async fn resolve_user_agent(state: &AppState) -> String {
 
     let mut version = String::new();
     let mut candidate_bins = Vec::new();
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = home_dir() {
         candidate_bins.push(home.join(".gemini").join("bin").join("agy.exe"));
     }
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
@@ -901,7 +876,6 @@ fn extract_oauth_clients_from_binary(bytes: &[u8]) -> Vec<(String, String)> {
             let candidate = &bytes[start..match_idx + suffix.len()];
             if let Ok(s) = std::str::from_utf8(candidate) {
                 if let Some((num_part, rest)) = s.split_once('-') {
-                    // Strip any preceding Go `.rodata` string characters before the numeric project ID
                     let clean_num: String = num_part
                         .chars()
                         .rev()
@@ -993,10 +967,14 @@ async fn refresh_with_local_oauth_client(
     }
 
     for bin_path in find_antigravity_binaries() {
-        let Ok(bytes) = fs::read(&bin_path) else {
-            continue;
+        let pairs = {
+            let Ok(bytes) = fs::read(&bin_path) else {
+                continue;
+            };
+            extract_oauth_clients_from_binary(&bytes)
         };
-        for (cid, sec) in extract_oauth_clients_from_binary(&bytes) {
+        trim_process_working_set();
+        for (cid, sec) in pairs {
             let resp = state
                 .http
                 .post("https://oauth2.googleapis.com/token")
@@ -1046,75 +1024,80 @@ fn load_ide_vscdb_credential() -> Option<StoredCred> {
         let storage_dir = base.join(ide_folder).join("User").join("globalStorage");
         for filename in ["state.vscdb", "state.vscdb.backup"] {
             let db_path = storage_dir.join(filename);
-            let Some(bytes) = read_file_shared(&db_path) else {
-                continue;
-            };
-            let key_marker = b"antigravityUnifiedStateSync.oauthToken";
-            let mut pos = 0;
-            let mut latest_match: Option<StoredCred> = None;
-            while pos + key_marker.len() < bytes.len() {
-                let Some(rel) = bytes[pos..]
-                    .windows(key_marker.len())
-                    .position(|w| w == key_marker)
-                else {
-                    break;
-                };
-                let start = pos + rel + key_marker.len();
-                pos = start;
-
-                let b64_slice: Vec<u8> = bytes[start..]
-                    .iter()
-                    .copied()
-                    .take_while(|&b| {
-                        b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
-                    })
-                    .collect();
-
-                if b64_slice.len() < 64 {
-                    continue;
-                }
-                let Ok(outer_decoded) = STANDARD.decode(&b64_slice) else {
+            let latest_match = {
+                let Some(bytes) = read_file_shared(&db_path) else {
                     continue;
                 };
+                let key_marker = b"antigravityUnifiedStateSync.oauthToken";
+                let mut pos = 0;
+                let mut found: Option<StoredCred> = None;
+                while pos + key_marker.len() < bytes.len() {
+                    let Some(rel) = bytes[pos..]
+                        .windows(key_marker.len())
+                        .position(|w| w == key_marker)
+                    else {
+                        break;
+                    };
+                    let start = pos + rel + key_marker.len();
+                    pos = start;
 
-                let sentinel = b"oauthTokenInfoSentinelKey";
-                if let Some(s_rel) = outer_decoded
-                    .windows(sentinel.len())
-                    .position(|w| w == sentinel)
-                {
-                    let after_sentinel = &outer_decoded[s_rel + sentinel.len()..];
-                    if let Some(b64_start) = after_sentinel
+                    let b64_slice: Vec<u8> = bytes[start..]
                         .iter()
-                        .position(|&b| b == b'C' || b == b'E')
+                        .copied()
+                        .take_while(|&b| {
+                            b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
+                        })
+                        .collect();
+
+                    if b64_slice.len() < 64 {
+                        continue;
+                    }
+                    let Ok(outer_decoded) = STANDARD.decode(&b64_slice) else {
+                        continue;
+                    };
+
+                    let sentinel = b"oauthTokenInfoSentinelKey";
+                    if let Some(s_rel) = outer_decoded
+                        .windows(sentinel.len())
+                        .position(|w| w == sentinel)
                     {
-                        let inner_b64: Vec<u8> = after_sentinel[b64_start..]
+                        let after_sentinel = &outer_decoded[s_rel + sentinel.len()..];
+                        if let Some(b64_start) = after_sentinel
                             .iter()
-                            .copied()
-                            .take_while(|&b| {
-                                b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
-                            })
-                            .collect();
-                        if let Ok(inner_bytes) = STANDARD.decode(&inner_b64) {
-                            let text = String::from_utf8_lossy(&inner_bytes);
-                            let access = extract_token_prefix(&text, "ya29.");
-                            let refresh = extract_token_prefix(&text, "1//");
-                            if refresh.is_some() || access.is_some() {
-                                latest_match = Some(StoredCred {
-                                    token: Some(StoredOAuthToken {
-                                        access_token: access,
-                                        token_type: Some("Bearer".to_string()),
-                                        refresh_token: refresh,
-                                        expiry: None,
-                                    }),
-                                    auth_method: Some("consumer".to_string()),
-                                    id_token: None,
-                                    id_token_email: None,
-                                });
+                            .position(|&b| b == b'C' || b == b'E')
+                        {
+                            let inner_b64: Vec<u8> = after_sentinel[b64_start..]
+                                .iter()
+                                .copied()
+                                .take_while(|&b| {
+                                    b.is_ascii_alphanumeric()
+                                        || b == b'+'
+                                        || b == b'/'
+                                        || b == b'='
+                                })
+                                .collect();
+                            if let Ok(inner_bytes) = STANDARD.decode(&inner_b64) {
+                                let text = String::from_utf8_lossy(&inner_bytes);
+                                let access = extract_token_prefix(&text, "ya29.");
+                                let refresh = extract_token_prefix(&text, "1//");
+                                if refresh.is_some() || access.is_some() {
+                                    found = Some(StoredCred {
+                                        token: Some(StoredOAuthToken {
+                                            access_token: access,
+                                            refresh_token: refresh,
+                                            expiry: None,
+                                        }),
+                                        id_token: None,
+                                        id_token_email: None,
+                                    });
+                                }
                             }
                         }
                     }
                 }
-            }
+                found
+            };
+            trim_process_working_set();
             if latest_match.is_some() {
                 return latest_match;
             }
@@ -1137,11 +1120,11 @@ fn extract_token_prefix(haystack: &str, prefix: &str) -> Option<String> {
 }
 
 fn agy_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".gemini").join("antigravity-cli"))
+    home_dir().map(|h| h.join(".gemini").join("antigravity-cli"))
 }
 
 fn agy_ide_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".gemini").join("antigravity"))
+    home_dir().map(|h| h.join(".gemini").join("antigravity"))
 }
 
 /// Checks if a file is currently locked by an active OS process (exclusive share_mode(0) open fails).
@@ -1222,7 +1205,6 @@ fn load_all_stored_credentials() -> Vec<(StoredCred, String)> {
     let active_label = resolve_active_source_label();
     let (ide_sessions, _) = detect_active_sessions();
 
-    // If IDE is actively running, check IDE's state.vscdb first as well as Windows Credential Manager
     if ide_sessions > 0 {
         if let Some(cred) = load_ide_vscdb_credential() {
             list.push((cred, active_label.clone()));
@@ -1248,7 +1230,7 @@ fn load_all_stored_credentials() -> Vec<(StoredCred, String)> {
         }
     }
 
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = home_dir() {
         let acp_path = home
             .join(".gemini")
             .join("antigravity-acp")
@@ -1260,11 +1242,9 @@ fn load_all_stored_credentials() -> Vec<(StoredCred, String)> {
                         StoredCred {
                             token: Some(StoredOAuthToken {
                                 access_token: None,
-                                token_type: Some("Bearer".to_string()),
                                 refresh_token: Some(rt.to_string()),
                                 expiry: None,
                             }),
-                            auth_method: Some("consumer".to_string()),
                             id_token: None,
                             id_token_email: None,
                         },
@@ -1419,7 +1399,7 @@ async fn get_valid_access_token(
     Err("NOT_AUTHENTICATED".to_string())
 }
 
-async fn fetch_usage_internal(state: &AppState) -> Result<UsageSnapshot, String> {
+pub(crate) async fn fetch_usage_internal(state: &AppState) -> Result<UsageSnapshot, String> {
     let installed = is_antigravity_installed();
     let token_res = get_valid_access_token(state, false).await;
     let (mut token, email, auth_source) = match token_res {
@@ -1552,11 +1532,6 @@ async fn fetch_usage_internal(state: &AppState) -> Result<UsageSnapshot, String>
                 "Claude and GPT models" => "claude_gpt".to_string(),
                 _ => "other".to_string(),
             };
-            let grp_desc = grp
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
 
             if let Some(b_arr) = grp.get("buckets").and_then(|b| b.as_array()) {
                 let mut sorted_b: Vec<&Value> = b_arr.iter().collect();
@@ -1569,42 +1544,24 @@ async fn fetch_usage_internal(state: &AppState) -> Result<UsageSnapshot, String>
                 });
 
                 for b in sorted_b {
-                    let id = b
-                        .get("bucketId")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("bucket")
-                        .to_string();
                     let window = b
                         .get("window")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
-                        .to_string();
-                    let disp = b
-                        .get("displayName")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(&id)
                         .to_string();
                     let rem = b
                         .get("remainingFraction")
                         .and_then(|v| v.as_f64())
                         .unwrap_or(1.0)
                         .clamp(0.0, 1.0);
-                    let reset_time = b
-                        .get("resetTime")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let reset_seconds = compute_reset_seconds(reset_time.as_deref());
+                    let reset_time = b.get("resetTime").and_then(|v| v.as_str());
+                    let reset_seconds = compute_reset_seconds(reset_time);
                     buckets.push(QuotaBucketView {
-                        id,
                         group_key: group_key.clone(),
-                        group_name: raw_grp_name.to_string(),
-                        group_description: grp_desc.clone(),
-                        display_name: disp,
                         window,
                         remaining_fraction: rem,
                         remaining_percent: (rem * 1000.0).round() / 10.0,
                         used_percent: ((1.0 - rem) * 1000.0).round() / 10.0,
-                        reset_time,
                         reset_seconds,
                     });
                 }
@@ -1681,20 +1638,15 @@ async fn fetch_usage_internal(state: &AppState) -> Result<UsageSnapshot, String>
                 .and_then(|v| v.as_f64())
                 .unwrap_or(1.0)
                 .clamp(0.0, 1.0);
-            let reset_time = q_info
-                .get("resetTime")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let reset_seconds = compute_reset_seconds(reset_time.as_deref());
+            let reset_time = q_info.get("resetTime").and_then(|v| v.as_str());
+            let reset_seconds = compute_reset_seconds(reset_time);
 
             models.push(ModelQuotaView {
-                id: model_id,
                 display_name,
                 family_key,
                 remaining_fraction: rem,
                 remaining_percent: (rem * 1000.0).round() / 10.0,
                 used_percent: ((1.0 - rem) * 1000.0).round() / 10.0,
-                reset_time,
                 reset_seconds,
             });
         }
@@ -1717,235 +1669,7 @@ async fn fetch_usage_internal(state: &AppState) -> Result<UsageSnapshot, String>
     })
 }
 
-async fn sync_pill_window(app: &tauri::AppHandle, state: &AppState, flyout_open: Option<bool>) {
-    let Some(pill_win) = app.get_webview_window("pill") else {
-        return;
-    };
-    let snap_opt = state.last_snapshot.lock().await.clone();
-    let show_rem = *state.show_remaining.lock().await;
-    let tb_col = state.dock.lock().await.taskbar_color.clone();
-    let snap_json = serde_json::to_string(&snap_opt).unwrap_or_else(|_| "null".to_string());
-    let tb_json = serde_json::to_string(&tb_col).unwrap_or_else(|_| "null".to_string());
-    let open_json = match flyout_open {
-        Some(b) => if b { "true" } else { "false" }.to_string(),
-        None => "undefined".to_string(),
-    };
-    let _ = pill_win.eval(&format!(
-        "window.__onPillSync && window.__onPillSync({}, {}, {}, {});",
-        snap_json,
-        if show_rem { "true" } else { "false" },
-        tb_json,
-        open_json
-    ));
-}
-
-#[tauri::command]
-async fn get_usage(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
-) -> Result<UsageSnapshot, String> {
-    let snap = fetch_usage_internal(&state).await?;
-    {
-        let mut guard = state.last_snapshot.lock().await;
-        *guard = Some(snap.clone());
-    }
-    sync_pill_window(&app, &state, None).await;
-    Ok(snap)
-}
-
-#[tauri::command]
-fn quit_app(app: tauri::AppHandle) {
-    app.exit(0);
-}
-
-async fn persist_current_window_state(state: &AppState) {
-    let opacity = *state.window_opacity.lock().await;
-    let dock = state.dock.lock().await;
-    let saved = SavedWindowState {
-        anchor_x: dock.anchor_x,
-        anchor_y: dock.anchor_y,
-        dock_edge: dock.dock_edge.clone(),
-        opacity,
-        always_on_top: true,
-        is_pinned: dock.is_pinned,
-    };
-    drop(dock);
-    save_window_state_sync(&saved);
-}
-
-#[tauri::command]
-async fn get_dock_state(state: State<'_, Arc<AppState>>) -> Result<DockStateView, String> {
-    let opacity = *state.window_opacity.lock().await;
-    let dock = state.dock.lock().await;
-    Ok(DockStateView {
-        is_collapsed: false,
-        dock_edge: dock.dock_edge.clone(),
-        is_pinned: dock.is_pinned,
-        autostart: is_autostart_enabled_sync(),
-        opacity,
-        taskbar_color: dock.taskbar_color.clone(),
-    })
-}
-
-#[tauri::command]
-async fn set_autostart(enabled: bool) -> Result<bool, String> {
-    set_autostart_sync(enabled)
-}
-
-#[tauri::command]
-async fn set_display_mode(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
-    show_remaining: Option<bool>,
-) -> Result<(), String> {
-    if let Some(rem) = show_remaining {
-        let mut guard = state.show_remaining.lock().await;
-        *guard = rem;
-    }
-    sync_pill_window(&app, &state, None).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn set_flyout_pinned(
-    state: State<'_, Arc<AppState>>,
-    pinned: bool,
-) -> Result<(), String> {
-    {
-        let mut dock = state.dock.lock().await;
-        dock.is_pinned = pinned;
-    }
-    persist_current_window_state(&state).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn collapse_to_edge(window: tauri::WebviewWindow) -> Result<(), String> {
-    let _ = window.hide();
-    Ok(())
-}
-
-#[tauri::command]
-async fn set_window_opacity(
-    window: tauri::WebviewWindow,
-    state: State<'_, Arc<AppState>>,
-    percent: u8,
-) -> Result<(), String> {
-    let clamped = percent.clamp(45, 100);
-    {
-        let mut guard = state.window_opacity.lock().await;
-        *guard = clamped;
-    }
-    if let Ok(hwnd) = window.hwnd() {
-        apply_hwnd_opacity(hwnd.0 as isize, clamped);
-    }
-    persist_current_window_state(&state).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn start_window_drag(
-    window: tauri::WebviewWindow,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
-    {
-        let mut dock = state.dock.lock().await;
-        dock.is_dragging = true;
-    }
-    let _ = window.start_dragging();
-    let state_clone = Arc::clone(&state);
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_millis(25)).await;
-            let down = unsafe { (GetAsyncKeyState(VK_LBUTTON) as u16 & 0x8000) != 0 };
-            if !down {
-                break;
-            }
-        }
-        let mut dock = state_clone.dock.lock().await;
-        dock.is_dragging = false;
-    });
-    Ok(())
-}
-
-#[tauri::command]
-async fn start_pill_drag(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
-    let Some(pill_win) = app.get_webview_window("pill") else {
-        return Ok(());
-    };
-    let Ok(hwnd) = pill_win.hwnd() else {
-        return Ok(());
-    };
-    let pill_h = hwnd.0 as isize;
-
-    let mut start_cursor = WinPoint::default();
-    let mut pill_rect = WinRect::default();
-    unsafe {
-        let _ = GetCursorPos(&mut start_cursor);
-        let _ = GetWindowRect(pill_h, &mut pill_rect);
-    }
-    let grab_offset_x = (start_cursor.x - pill_rect.left).max(0);
-
-    {
-        let mut dock = state.dock.lock().await;
-        dock.is_dragging = true;
-    }
-
-    let state_clone = Arc::clone(&state);
-    let app_clone = app.clone();
-    tokio::spawn(async move {
-        let scale = get_hwnd_scale(pill_h);
-        let work = get_work_area_for_hwnd(pill_h);
-        let (tb_rect, _) = get_taskbar_rects(scale, work);
-        let mut final_rel_x: Option<i32> = None;
-
-        loop {
-            tokio::time::sleep(Duration::from_millis(16)).await;
-            let down = unsafe { (GetAsyncKeyState(VK_LBUTTON) as u16 & 0x8000) != 0 };
-            if !down {
-                break;
-            }
-            let mut cur = WinPoint::default();
-            unsafe {
-                let _ = GetCursorPos(&mut cur);
-            }
-            if (cur.x - start_cursor.x).abs() >= 4 {
-                let desired_rel_x = (cur.x - grab_offset_x - tb_rect.left).max(4);
-                let (rx, _, _, _, _, _) =
-                    embed_pill_into_taskbar(pill_h, desired_rel_x, scale, work);
-                final_rel_x = Some(rx);
-            }
-        }
-
-        if let Some(rx) = final_rel_x {
-            let (_, _, _, _, _, sampled_col) = embed_pill_into_taskbar(pill_h, rx, scale, work);
-            {
-                let mut dock = state_clone.dock.lock().await;
-                dock.anchor_x = rx;
-                dock.is_dragging = false;
-                if sampled_col.is_some() {
-                    dock.taskbar_color = sampled_col;
-                }
-            }
-            persist_current_window_state(&state_clone).await;
-            sync_pill_window(&app_clone, &state_clone, None).await;
-        } else {
-            let mut dock = state_clone.dock.lock().await;
-            dock.is_dragging = false;
-        }
-    });
-
-    Ok(())
-}
-
-#[tauri::command]
-async fn launch_antigravity(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
-) -> Result<UsageSnapshot, String> {
+pub(crate) async fn launch_antigravity_action(state: &AppState) {
     {
         let mut guard = state.cached_token.lock().await;
         *guard = None;
@@ -1975,37 +1699,6 @@ async fn launch_antigravity(
             }
         }
     }
-
-    let snap = fetch_usage_internal(&state).await?;
-    {
-        let mut guard = state.last_snapshot.lock().await;
-        *guard = Some(snap.clone());
-    }
-    sync_pill_window(&app, &state, None).await;
-    Ok(snap)
-}
-
-fn show_flyout_above_x(w: &tauri::WebviewWindow, pill_left_x: i32, pill_top_y: i32, opacity: u8) {
-    let Ok(hwnd) = w.hwnd() else { return };
-    let h = hwnd.0 as isize;
-    let scale = get_hwnd_scale(h);
-    let work = get_work_area_for_point(pill_left_x, pill_top_y);
-    let (tb_rect, _) = get_taskbar_rects(scale, work);
-
-    let full_w = (FULL_WIDTH_LOGICAL * scale).round() as i32;
-    let full_h = (FULL_HEIGHT_LOGICAL * scale).round() as i32;
-    let margin = (8.0 * scale).round() as i32;
-
-    let min_x = work.left + margin;
-    let max_x = (work.right - full_w - margin).max(min_x);
-    let fx = pill_left_x.clamp(min_x, max_x);
-    let fy = (tb_rect.top - full_h - margin).max(work.top + margin);
-
-    apply_hwnd_taskbar_style(h, false);
-    apply_hwnd_opacity(h, opacity);
-    set_hwnd_bounds(h, fx, fy, full_w, full_h);
-    let _ = w.show();
-    raise_hwnd_topmost(h);
 }
 
 fn main() {
@@ -2028,216 +1721,53 @@ fn main() {
         .build()
         .expect("HTTP_CLIENT_INIT_FAILED");
 
-    let saved_initial = load_saved_window_state();
-    let init_opacity = saved_initial
+    let saved = load_saved_window_state();
+    let init_opacity = saved
         .as_ref()
         .map(|s| s.opacity.clamp(45, 100))
         .unwrap_or(95);
-    let init_pinned = saved_initial.as_ref().map(|s| s.is_pinned).unwrap_or(false);
-    // Default to left "Widgets" slot (`anchor_x = 12`) if previous saved state was on the far right (`> 800`)
-    let init_rel_x = saved_initial
+    let init_locale = saved
         .as_ref()
-        .filter(|s| s.dock_edge == "taskbar_widgets")
-        .map(|s| s.anchor_x)
-        .unwrap_or(0);
+        .and_then(|s| s.locale.clone())
+        .unwrap_or_else(|| "et".to_string());
+    let init_show_rem = saved
+        .as_ref()
+        .and_then(|s| s.show_remaining)
+        .unwrap_or(true);
+    let init_rel_x = saved.as_ref().map(|s| s.anchor_x).unwrap_or(0);
 
     let app_state = Arc::new(AppState {
         cached_token: Mutex::new(None),
         cached_project_id: Mutex::new(None),
         cached_oauth_client: Mutex::new(None),
         cached_user_agent: Mutex::new(None),
-        window_opacity: Mutex::new(init_opacity),
-        dock: Mutex::new(DockRuntime {
-            anchor_x: init_rel_x,
-            anchor_y: 0,
-            dock_edge: "taskbar_widgets".to_string(),
-            is_dragging: false,
-            is_pinned: init_pinned,
-            taskbar_color: None,
-        }),
-        last_snapshot: Mutex::new(None),
-        show_remaining: Mutex::new(true),
         http,
     });
 
-    let state_for_setup = Arc::clone(&app_state);
+    // Single-threaded background Tokio runtime for HTTP requests (minimal memory footprint)
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("TOKIO_RUNTIME_INIT_FAILED");
+    let rt_handle = rt.handle().clone();
 
-    tauri::Builder::default()
-        .manage(app_state)
-        .invoke_handler(tauri::generate_handler![
-            get_usage,
-            launch_antigravity,
-            quit_app,
-            set_autostart,
-            set_display_mode,
-            set_window_opacity,
-            start_window_drag,
-            start_pill_drag,
-            get_dock_state,
-            set_flyout_pinned,
-            collapse_to_edge
-        ])
-        .setup(move |app| {
-            let main_opt = app.get_webview_window("main");
-            let pill_opt = app.get_webview_window("pill");
-
-            if let Some(ref w) = main_opt {
-                let _ = w.set_always_on_top(true);
-                let _ = w.hide();
-                if let Ok(hwnd) = w.hwnd() {
-                    let h = hwnd.0 as isize;
-                    apply_hwnd_taskbar_style(h, false);
-                    apply_hwnd_opacity(h, init_opacity);
-                }
-            }
-
-            if let (Some(main_win), Some(pill_win)) = (main_opt, pill_opt) {
-                if let (Ok(main_hwnd), Ok(pill_hwnd)) = (main_win.hwnd(), pill_win.hwnd()) {
-                    let main_h = main_hwnd.0 as isize;
-                    let pill_h = pill_hwnd.0 as isize;
-                    let scale = get_hwnd_scale(pill_h);
-                    let work = get_work_area_for_hwnd(pill_h);
-
-                    // Embed the `pill` window directly inside `Shell_TrayWnd` on the left "Widgets" slot
-                    let (rel_x, _, _, _, _, sampled_tb) =
-                        embed_pill_into_taskbar(pill_h, init_rel_x, scale, work);
-
-                    if let Ok(mut guard) = state_for_setup.dock.try_lock() {
-                        guard.anchor_x = rel_x;
-                        guard.dock_edge = "taskbar_widgets".to_string();
-                        guard.taskbar_color = sampled_tb;
-                        save_window_state_sync(&SavedWindowState {
-                            anchor_x: rel_x,
-                            anchor_y: 0,
-                            dock_edge: "taskbar_widgets".to_string(),
-                            opacity: init_opacity,
-                            always_on_top: true,
-                            is_pinned: init_pinned,
-                        });
-                    }
-
-                    // Hover watcher: monitors cursor over embedded taskbar `pill` -> opens/closes `main` Flyout above taskbar
-                    let app_handle_hover = app.handle().clone();
-                    let state_for_hover = Arc::clone(&state_for_setup);
-                    tauri::async_runtime::spawn(async move {
-                        let mut enter_ticks: u32 = 0;
-                        let mut leave_ticks: u32 = 0;
-                        let mut z_ticks: u32 = 0;
-
-                        loop {
-                            tokio::time::sleep(Duration::from_millis(45)).await;
-
-                            let lbutton_down =
-                                unsafe { (GetAsyncKeyState(VK_LBUTTON) as u16 & 0x8000) != 0 };
-                            let mut cursor = WinPoint::default();
-                            let mut pill_rect = WinRect::default();
-                            let mut main_rect = WinRect::default();
-                            unsafe {
-                                let _ = GetCursorPos(&mut cursor);
-                                let _ = GetWindowRect(pill_h, &mut pill_rect);
-                                let _ = GetWindowRect(main_h, &mut main_rect);
-                            }
-
-                            let scale = get_hwnd_scale(pill_h);
-                            let pad = (14.0 * scale).round() as i32;
-                            let work = get_work_area_for_hwnd(pill_h);
-
-                            // Keep embedded pill at top of Shell_TrayWnd's child Z-order
-                            z_ticks += 1;
-                            if z_ticks >= 20 {
-                                z_ticks = 0;
-                                let rx = state_for_hover.dock.lock().await.anchor_x;
-                                raise_pill_in_taskbar(pill_h, rx, scale, work);
-                            }
-
-                            let inside_pill = cursor.x >= pill_rect.left
-                                && cursor.x <= pill_rect.right
-                                && cursor.y >= pill_rect.top
-                                && cursor.y <= pill_rect.bottom;
-
-                            let flyout_vis = main_win.is_visible().unwrap_or(false);
-                            let (is_dragging, is_pinned) = {
-                                let dock = state_for_hover.dock.lock().await;
-                                (dock.is_dragging, dock.is_pinned)
-                            };
-
-                            if is_dragging {
-                                enter_ticks = 0;
-                                leave_ticks = 0;
-                                continue;
-                            }
-
-                            if !flyout_vis {
-                                leave_ticks = 0;
-                                if inside_pill && !lbutton_down {
-                                    enter_ticks += 1;
-                                    if enter_ticks >= 3 {
-                                        enter_ticks = 0;
-                                        let op = *state_for_hover.window_opacity.lock().await;
-                                        show_flyout_above_x(
-                                            &main_win,
-                                            pill_rect.left,
-                                            pill_rect.top,
-                                            op,
-                                        );
-                                        sync_pill_window(
-                                            &app_handle_hover,
-                                            &state_for_hover,
-                                            Some(true),
-                                        )
-                                        .await;
-                                    }
-                                } else {
-                                    enter_ticks = 0;
-                                }
-                            } else {
-                                enter_ticks = 0;
-                                let (tb_rect, _) = get_taskbar_rects(scale, work);
-                                let inside_flyout_or_bridge = cursor.x >= main_rect.left - pad
-                                    && cursor.x <= main_rect.right + pad
-                                    && cursor.y >= main_rect.top - pad
-                                    && cursor.y <= tb_rect.bottom + pad;
-
-                                if inside_pill
-                                    || inside_flyout_or_bridge
-                                    || lbutton_down
-                                    || is_pinned
-                                {
-                                    leave_ticks = 0;
-                                } else {
-                                    leave_ticks += 1;
-                                    if leave_ticks >= 6 {
-                                        leave_ticks = 0;
-                                        let _ = main_win.hide();
-                                        sync_pill_window(
-                                            &app_handle_hover,
-                                            &state_for_hover,
-                                            Some(false),
-                                        )
-                                        .await;
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-
-            // Background task: initial usage fetch
-            let app_handle_bg = app.handle().clone();
-            let state_for_bg = Arc::clone(&state_for_setup);
-            tauri::async_runtime::spawn(async move {
-                if let Ok(snap) = fetch_usage_internal(&state_for_bg).await {
-                    {
-                        let mut guard = state_for_bg.last_snapshot.lock().await;
-                        *guard = Some(snap);
-                    }
-                    sync_pill_window(&app_handle_bg, &state_for_bg, None).await;
+    std::thread::Builder::new()
+        .name("agy-net".to_string())
+        .spawn(move || {
+            rt.block_on(async {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
                 }
             });
-
-            Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("TAURI_RUNTIME_ERROR");
+        .expect("NET_THREAD_SPAWN_FAILED");
+
+    ui_win32::run_native_win32_ui(
+        app_state,
+        rt_handle,
+        init_rel_x,
+        init_opacity,
+        init_locale,
+        init_show_rem,
+    );
 }
