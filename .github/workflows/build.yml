@@ -20,6 +20,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-windows:
@@ -93,7 +94,14 @@ jobs:
 
           $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
           if (-not (Test-Path $makensis)) {
-            $makensis = (Get-Command makensis -ErrorAction Stop).Source
+            $cmd = Get-Command makensis -ErrorAction SilentlyContinue
+            if ($cmd) {
+              $makensis = $cmd.Source
+            } else {
+              Write-Host "Installing NSIS via Chocolatey..."
+              choco install nsis -y --no-progress
+              $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+            }
           }
           & $makensis "/DAPP_VERSION=${{ steps.check.outputs.raw_version }}" "installer.nsi"
           if ($LASTEXITCODE -ne 0) {
