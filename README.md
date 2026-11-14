@@ -4,7 +4,7 @@
 
 ## Why This Exists
 
-Google Antigravity uses rolling usage quotas across its model families: a 5-hour window (`5h`) and a 7-day window (`weekly`), split between Gemini models (Gemini 4 Argon, Gemini 3.8 Flash) and third-party models (Claude Opus 5.5, Claude Sonnet 5.5).
+Google Antigravity uses rolling usage quotas across its model families: a 5-hour window (`5h`) and a 7-day window (`weekly`), split between Gemini models (Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen, Gemini 3.8 Flash) and third-party models (Claude Opus 5.5, Claude Sonnet 5.5).
 
 Without a dedicated monitor, checking how much quota is left or when a window resets means stopping your work to run `/usage` inside an active CLI session or opening IDE settings. When multiple terminal or editor sessions are open at once, it is easy to hit a rate limit mid-task. This tool places a small two-line indicator on the left side of the Windows 11 Taskbar that switches between 5-hour (`5h`) and weekly (`Wk`) numbers every 10 seconds, and opens a full Flyout panel above the taskbar when you hover over it.
 

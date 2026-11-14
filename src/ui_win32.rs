@@ -1,8 +1,8 @@
 use crate::{
-    embed_pill_into_taskbar, fetch_usage_internal, get_hwnd_scale, get_taskbar_rects,
-    get_work_area_for_hwnd, get_work_area_for_point, is_autostart_enabled_sync,
-    launch_antigravity_action, raise_hwnd_topmost, raise_pill_in_taskbar, save_window_state_sync,
-    set_autostart_sync, to_wide, trim_process_working_set, AppState, DwmSetWindowAttribute,
+    embed_pill_into_taskbar, fetch_usage_internal, find_taskbar_hwnd, get_hwnd_scale,
+    get_taskbar_rects, get_work_area_for_hwnd, get_work_area_for_point, is_autostart_enabled_sync,
+    launch_antigravity_action, raise_hwnd_topmost, save_window_state_sync, set_autostart_sync,
+    sync_pill_taskbar_zorder, to_wide, trim_process_working_set, AppState, DwmSetWindowAttribute,
     GetWindowLongW, GetWindowRect, SavedWindowState, SetLayeredWindowAttributes, SetWindowLongW,
     SetWindowPos, UsageSnapshot, WinPoint, WinRect, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT,
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, FULL_HEIGHT_LOGICAL, FULL_WIDTH_LOGICAL,
@@ -329,7 +329,8 @@ struct UiShared {
     slider_rect: WinRect,
     enter_ticks: u32,
     leave_ticks: u32,
-    z_ticks: u32,
+    last_tray_hwnd: isize,
+    was_taskbar_fg: bool,
 }
 
 static GLOBAL_UI: OnceLock<Arc<StdMutex<UiShared>>> = OnceLock::new();
@@ -764,7 +765,7 @@ impl FontSet {
             section: make(10.0, FW_BOLD),
             hero_title: make(11.5, FW_BOLD),
             hero_pct: make(16.0, FW_BOLD),
-            card_title: make(11.0, FW_SEMIBOLD),
+            card_title: make(10.5, FW_SEMIBOLD),
             card_pct: make(12.0, FW_BOLD),
             small: make(10.0, FW_MEDIUM),
             body: make(11.0, FW_NORMAL),
@@ -913,10 +914,15 @@ fn paint_pill_window(hwnd: isize, ui: &UiShared) {
                 .models
                 .iter()
                 .find(|m| m.family_key == "gemini_3_8_flash");
-            let argon_m = snap
+            let gem4_m = snap
                 .models
                 .iter()
-                .find(|m| m.family_key == "gemini_4_argon");
+                .filter(|m| m.family_key.starts_with("gemini_4"))
+                .min_by(|a, b| {
+                    a.remaining_fraction
+                        .partial_cmp(&b.remaining_fraction)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
 
             let r1_rem = if win_key == "5h" {
                 flash_m
@@ -927,7 +933,7 @@ fn paint_pill_window(hwnd: isize, ui: &UiShared) {
                 gem_b.map(|b| b.remaining_fraction).unwrap_or(1.0)
             };
             let r2_rem = if win_key == "5h" {
-                argon_m
+                gem4_m
                     .map(|m| m.remaining_fraction)
                     .or_else(|| gem_b.map(|b| b.remaining_fraction))
                     .unwrap_or(1.0)
@@ -937,7 +943,7 @@ fn paint_pill_window(hwnd: isize, ui: &UiShared) {
 
             let rows = [
                 (format!("Flash {}", win_tag), r1_rem, 3.5 * scale),
-                (format!("Argon {}", win_tag), r2_rem, 19.5 * scale),
+                (format!("Gem 4 {}", win_tag), r2_rem, 19.5 * scale),
             ];
 
             let text_left = 17.5 * scale;
@@ -1682,7 +1688,7 @@ fn paint_dashboard_view(
         );
 
         let short_title = if gkey == "gemini" {
-            "Gemini (Argon & Flash)"
+            "Gemini (4 & 3.8 Flash)"
         } else if gkey == "claude_gpt" {
             "Claude (Opus & Sonnet)"
         } else {
@@ -1847,12 +1853,15 @@ fn paint_dashboard_view(
         let short_name = m
             .display_name
             .replace("Gemini ", "Gem ")
-            .replace("Claude ", "Claude ");
+            .replace("Hydrogen ", "Hydro ")
+            .replace("Claude Opus 5.5", "Claude Opus")
+            .replace("Claude Sonnet 5.5", "Claude Sonnet")
+            .replace(" (Medium)", " (Med)");
         canvas.draw_text(
             &short_name,
             mx + 8.0 * scale,
             my + 5.0 * scale,
-            card_w - 64.0 * scale,
+            card_w - 56.0 * scale,
             15.0 * scale,
             fonts.card_title,
             0xF1F5F9,
@@ -1984,7 +1993,7 @@ fn paint_info_view(
     canvas.fill_round_rect(pad_x, cy, content_w, c2_h, 8.0 * scale, 0x131B2E, 235);
     canvas.stroke_round_rect(pad_x, cy, content_w, c2_h, 8.0 * scale, 1.0 * scale, 0x94A3B8, 42);
     canvas.draw_text(
-        &ui.t("info.aboutTitle"),
+        concat!("Antigravity Quota Monitor v", env!("CARGO_PKG_VERSION")),
         pad_x + 10.0 * scale,
         cy + 8.0 * scale,
         content_w - 20.0 * scale,
@@ -2345,10 +2354,16 @@ unsafe extern "system" fn pill_wnd_proc(
                         let pad = (14.0 * scale).round() as i32;
                         let work = get_work_area_for_hwnd(ui.pill_hwnd);
 
-                        ui.z_ticks += 1;
-                        if ui.z_ticks >= 5 {
-                            ui.z_ticks = 0;
-                            raise_pill_in_taskbar(ui.pill_hwnd);
+                        if !ui.is_dragging {
+                            let ui_ref: &mut UiShared = &mut *ui;
+                            if let Some(col) = sync_pill_taskbar_zorder(
+                                ui_ref.pill_hwnd,
+                                &mut ui_ref.last_tray_hwnd,
+                                &mut ui_ref.was_taskbar_fg,
+                                ui_ref.anchor_x,
+                            ) {
+                                ui_ref.taskbar_color = Some(col);
+                            }
                         }
 
                         let inside_pill = cursor.x >= pill_rect.left
@@ -2794,7 +2809,8 @@ pub fn run_native_win32_ui(
             slider_rect: WinRect::default(),
             enter_ticks: 0,
             leave_ticks: 0,
-            z_ticks: 0,
+            last_tray_hwnd: find_taskbar_hwnd(),
+            was_taskbar_fg: false,
         }));
 
         let _ = GLOBAL_UI.set(Arc::clone(&ui_shared));

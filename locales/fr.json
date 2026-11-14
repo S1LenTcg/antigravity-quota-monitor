@@ -48,7 +48,7 @@
     "loginAction": "Ouvrir Antigravity / Vérifier"
   },
   "groups": {
-    "gemini": "Gemini (4 Argon & 3.8 Flash)",
+    "gemini": "Gemini (4 & 3.8 Flash)",
     "claude_gpt": "Claude (Opus 5.5 & Sonnet 5.5)",
     "other": "Groupe de quotas"
   },
@@ -63,7 +63,9 @@
     "claude_weekly": "Claude Sem"
   },
   "families": {
+    "gemini_4_carbon": "Gemini 4 Carbon",
     "gemini_4_argon": "Gemini 4 Argon",
+    "gemini_4_hydrogen": "Gemini 4 Hydrogen",
     "gemini_3_8_flash": "Gemini 3.8 Flash",
     "claude_opus": "Claude Opus 5.5",
     "claude_sonnet": "Claude Sonnet 5.5",
@@ -78,7 +80,7 @@
     "secs": "{s}s"
   },
   "info": {
-    "aboutTitle": "Antigravity Quota Monitor v0.2.0",
+    "aboutTitle": "Antigravity Quota Monitor v0.3.1",
     "aboutDesc": "Widget de bureau en temps réel pour suivre les quotas Google Antigravity CLI et IDE. Ne contient aucun secret OAuth intégré ni serveur tiers.",
     "repoTitle": "Auteur & Dépôt",
     "authorLabel": "Auteur :",

@@ -108,6 +108,7 @@ extern "system" {
     pub(crate) fn SetWindowLongPtrW(hwnd: isize, index: i32, new_long: isize) -> isize;
     pub(crate) fn SetLayeredWindowAttributes(hwnd: isize, cr_key: u32, alpha: u8, flags: u32) -> i32;
     pub(crate) fn GetWindowRect(hwnd: isize, lp_rect: *mut WinRect) -> i32;
+    pub(crate) fn GetForegroundWindow() -> isize;
     fn FindWindowW(lp_class_name: *const u16, lp_window_name: *const u16) -> isize;
     fn FindWindowExW(
         hwnd_parent: isize,
@@ -302,7 +303,7 @@ pub(crate) fn raise_hwnd_topmost(hwnd: isize) {
     }
 }
 
-fn find_taskbar_hwnd() -> isize {
+pub(crate) fn find_taskbar_hwnd() -> isize {
     let tray_class = to_wide("Shell_TrayWnd");
     unsafe { FindWindowW(tray_class.as_ptr(), std::ptr::null()) }
 }
@@ -407,22 +408,39 @@ pub(crate) fn embed_pill_into_taskbar(
     (rel_x, sampled_col)
 }
 
-pub(crate) fn raise_pill_in_taskbar(pill_hwnd: isize) {
-    unsafe {
-        let tray_hwnd = find_taskbar_hwnd();
-        if tray_hwnd != 0 {
-            let _ = SetWindowLongPtrW(pill_hwnd, GWLP_HWNDPARENT, tray_hwnd);
-        }
-        let _ = SetWindowPos(
-            pill_hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        );
+pub(crate) fn sync_pill_taskbar_zorder(
+    pill_hwnd: isize,
+    last_tray_hwnd: &mut isize,
+    was_taskbar_fg: &mut bool,
+    anchor_x: i32,
+) -> Option<String> {
+    let tray_hwnd = find_taskbar_hwnd();
+    if tray_hwnd == 0 {
+        return None;
     }
+    if tray_hwnd != *last_tray_hwnd {
+        *last_tray_hwnd = tray_hwnd;
+        let scale = get_hwnd_scale(pill_hwnd);
+        let work = get_work_area_for_hwnd(pill_hwnd);
+        let (_, col) = embed_pill_into_taskbar(pill_hwnd, anchor_x, scale, work);
+        return col;
+    }
+    let is_taskbar_fg = unsafe { GetForegroundWindow() == tray_hwnd };
+    if is_taskbar_fg != *was_taskbar_fg {
+        *was_taskbar_fg = is_taskbar_fg;
+        unsafe {
+            let _ = SetWindowPos(
+                pill_hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+    None
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -769,6 +787,16 @@ fn is_antigravity_installed() -> bool {
     false
 }
 
+fn parse_semver_tuple(v: &str) -> (u32, u32, u32) {
+    let core = v.split('-').next().unwrap_or(v);
+    let mut parts = core.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
 /// Dynamically detects the installed Antigravity CLI version via `agy.exe --version` (or IDE package.json)
 /// and constructs the User-Agent string without hardcoding version numbers or changelists.
 async fn resolve_user_agent(state: &AppState) -> String {
@@ -780,6 +808,7 @@ async fn resolve_user_agent(state: &AppState) -> String {
     }
 
     let mut version = String::new();
+    let mut best_semver = (0u32, 0u32, 0u32);
     let mut candidate_bins = Vec::new();
     if let Some(home) = home_dir() {
         candidate_bins.push(home.join(".gemini").join("bin").join("agy.exe"));
@@ -801,8 +830,11 @@ async fn resolve_user_agent(state: &AppState) -> String {
                     && v.chars()
                         .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
                 {
-                    version = v;
-                    break;
+                    let sv = parse_semver_tuple(&v);
+                    if version.is_empty() || sv > best_semver {
+                        best_semver = sv;
+                        version = v;
+                    }
                 }
             }
         }
@@ -1610,14 +1642,29 @@ pub(crate) async fn fetch_usage_internal(state: &AppState) -> Result<UsageSnapsh
             if !allowed_set.is_empty() && !allowed_set.contains(&model_id) {
                 continue;
             }
-            let family_key = if model_id.starts_with("gemini-4-argon") {
+            let family_key = if model_id.starts_with("gemini-4-carbon") {
+                "gemini_4_carbon".to_string()
+            } else if model_id.starts_with("gemini-4-argon") {
                 "gemini_4_argon".to_string()
-            } else if model_id.starts_with("gemini-3.8-flash") {
+            } else if model_id.starts_with("gemini-4-hydrogen") {
+                "gemini_4_hydrogen".to_string()
+            } else if model_id.starts_with("gemini-3.8-flash")
+                || model_id.starts_with("gemini-3.")
+                || model_id.starts_with("gemini-3-flash")
+            {
                 "gemini_3_8_flash".to_string()
+            } else if model_id.starts_with("gemini-4-") {
+                "gemini_4_other".to_string()
             } else if model_id.starts_with("claude-opus") {
                 "claude_opus".to_string()
             } else if model_id.starts_with("claude-sonnet") {
                 "claude_sonnet".to_string()
+            } else if model_id.starts_with("claude-haiku") {
+                "claude_haiku".to_string()
+            } else if !allowed_set.is_empty() && model_id.starts_with("gemini-") {
+                "gemini_other".to_string()
+            } else if !allowed_set.is_empty() && model_id.starts_with("claude-") {
+                "claude_other".to_string()
             } else {
                 continue;
             };
